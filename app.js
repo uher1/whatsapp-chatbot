@@ -29,7 +29,7 @@ const logger = winston.createLogger({
 const GROQ_CONFIG = {
     enabled: true,
     apiKey: process.env.GROQ_API_KEY || '',
-    model: 'llama-3.1-70b-versatile',
+    model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',  // ← WORKING MODEL
     baseURL: 'https://api.groq.com/openai/v1',
     maxTokens: 1000,
     temperature: 0.7,
