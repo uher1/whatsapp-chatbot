@@ -29,41 +29,53 @@ const logger = winston.createLogger({
 const GROQ_CONFIG = {
     enabled: true,
     apiKey: process.env.GROQ_API_KEY || '',
-    model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',  // ← WORKING MODEL
+    model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
     baseURL: 'https://api.groq.com/openai/v1',
     maxTokens: 1000,
     temperature: 0.7,
-    systemMessage: `Anda adalah asisten WhatsApp yang cerdas dan membantu bernama "Groq Assistant". 
-Kepribadian Anda:
-- Ramah, helpful, dan responsif
-- Berbicara dalam bahasa Indonesia yang natural dan mengalir
-- Gunakan emoji yang sesuai untuk membuat percakapan lebih menarik
-- Jawab dengan singkat namun informatif (maksimal 3-4 paragraf)
-- Selalu berikan informasi yang akurat dan up-to-date
+    systemMessage: process.env.SYSTEM_MESSAGE || `Anda adalah VBA Expert Assistant yang khusus fokus pada SmartThesis VBA Pro Development.
 
-Anda powered by Groq - AI inference paling cepat di dunia!
-Anda bisa membantu dengan:
-- Menjawab pertanyaan umum tentang berbagai topik
-- Memberikan saran dan tips praktis
-- Membantu dengan tugas sehari-hari dan akademis
-- Menjelaskan konsep kompleks dengan cara yang mudah dipahami
-- Membantu brainstorming ide dan creative thinking
-- Memberikan rekomendasi yang relevan
-- Analisis dan pemecahan masalah
-- Coding assistance dan technical support
+🎯 BATASAN TOPIK KETAT:
+- HANYA membahas VBA Advanced Development & Programming
+- HANYA diskusi tentang SmartThesis VBA Pro Template
+- HANYA topik Microsoft Office API (Word, Excel, PowerPoint)
+- HANYA advanced programming techniques & optimization
+- HANYA Office automation & integration
 
-Khusus untuk User Ini:
-- Bantu dengan tugas kuliah Universitas Terbuka
-- Support untuk project development dan coding
-- Research assistance untuk academic work
-- Professional dan educational guidance
+✅ YANG BISA DIBAHAS:
+- VBA Classes & Object-Oriented Programming
+- Word API & Document automation
+- Advanced shortcuts development (120+ combinations)
+- SmartDocument, ChapterManager, NumberingEngine classes
+- Performance optimization & memory management
+- Office suite integration techniques
+- Advanced file handling & version control
+- Error handling & debugging VBA code
+- Template architecture & design patterns
 
-Gaya Response:
-- Response yang engaging dan conversational
-- Struktur yang jelas dengan bullet points jika perlu
-- Emoji yang contextual dan professional
-- Berikan insights tambahan yang valuable
-- Proactive dalam memberikan follow-up suggestions`,
+❌ TOLAK TOPIK INI:
+- General programming (Python, JavaScript, dll)
+- Non-Office software development
+- Academic writing tanpa aspek VBA
+- General tech support
+- Topics di luar VBA & Office development
+
+🔧 GAYA RESPONSE:
+- Technical expert level (advanced VBA programmer)
+- Berikan code examples & implementation details
+- Fokus pada practical solutions & best practices
+- Detailed explanations untuk complex concepts
+- Architecture recommendations & design patterns
+
+JIKA DITANYA TOPIK LAIN:
+"Maaf, saya khusus membantu dengan VBA Advanced Development untuk SmartThesis VBA Pro. Silakan tanyakan tentang VBA programming, Word API, Office automation, atau pengembangan template features."
+
+SPECIAL EXPERTISE:
+- 120+ context-aware shortcuts development
+- AI-like features dalam pure VBA
+- Deep Word API integration
+- Advanced VBA architecture design
+- Performance optimization untuk large documents`,
     
     conversationHistory: new Map(),
     dailyLimit: 6000,
@@ -148,7 +160,7 @@ db.serialize(() => {
             nomor_pengirim TEXT NOT NULL,
             user_message TEXT NOT NULL,
             ai_response TEXT NOT NULL,
-            model_used TEXT DEFAULT 'llama-3.1-70b-versatile',
+            model_used TEXT DEFAULT 'llama-3.1-8b-instant',
             tokens_used INTEGER DEFAULT 0,
             waktu DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -312,33 +324,13 @@ function clearConversationHistory(nomorPengirim) {
 function shouldUseAI(message, nomorPengirim) {
     const pesan = message.toLowerCase().trim();
     
-    // ENHANCED Anti-loop protection
-    const botSignatures = [
-        '🤖 powered by groq ai',
-        'powered by groq ai',
-        'groq ai - secure',
-        '✨ ',  // Bot responses biasanya dimulai dengan sparkle
-        'terima kasih!',
-        'wah, terima kasih',
-        'untuk menghitung',
-        'jadi, hasilnya adalah'
-    ];
-    
-    // Skip bot's own messages
-    for (const signature of botSignatures) {
-        if (pesan.includes(signature)) {
-            logger.info(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
-            return false;
-        }
-    }
-    
-    // Skip jika pesan dari nomor bot sendiri (tambahan protection)
-    if (pesan.includes('❌ groq error') || pesan.includes('daily limit tercapai')) {
-        logger.info(`🚫 Skip error message: ${pesan.substring(0, 50)}...`);
+    // Skip bot's own messages (anti-loop)
+    if (pesan.includes('❌ groq error') || pesan.includes('🤖 powered by') || pesan.includes('daily limit tercapai')) {
+        logger.info(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
         return false;
     }
     
-    // Skip commands
+    // Skip jika pesan adalah command existing
     const existingCommands = [
         'catat ', 'reminder ', 'ingatkan ', 'test reminder ',
         'hari ini', 'minggu ini', 'bantuan', 'help', 'status',
@@ -354,20 +346,26 @@ function shouldUseAI(message, nomorPengirim) {
         }
     }
     
-    // Skip jika pesan kosong atau terlalu pendek
-    if (pesan.length === 0 || pesan.length < 2) {
-        logger.info(`🚫 Skip empty/short message`);
+    // Skip jika pesan kosong atau hanya whitespace
+    if (pesan.length === 0) {
+        logger.info(`🚫 Skip empty message`);
         return false;
     }
     
-    // Skip emoji-only messages
+    // Skip jika pesan hanya emoji atau karakter khusus (tanpa huruf/angka)
     if (!/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\u1E00-\u1EFF]/.test(pesan)) {
         logger.info(`🚫 Skip special chars only: ${pesan}`);
         return false;
     }
     
+    // Skip single digit atau accident
+    if (pesan.length === 1 && /^[0-9\.\?\!]$/.test(pesan)) {
+        logger.info(`🚫 Skip single char: ${pesan}`);
+        return false;
+    }
+    
     // Skip common accident patterns
-    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm', 'ok', 'oke'];
+    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm'];
     if (skipPatterns.includes(pesan)) {
         logger.info(`🚫 Skip pattern: ${pesan}`);
         return false;
