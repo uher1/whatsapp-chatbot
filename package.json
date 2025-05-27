@@ -1,20 +1,40 @@
 {
-  "name": "whatsapp-chatbot",
-  "version": "1.0.0",
-  "description": "Chatbot WhatsApp untuk catatan harian",
+  "name": "whatsapp-groq-chatbot",
+  "version": "2.0.0",
+  "description": "WhatsApp Chatbot dengan Groq AI - Secure Version",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "node app.js"
+    "dev": "nodemon app.js",
+    "pm2": "pm2 start app.js --name whatsapp-bot",
+    "pm2-restart": "pm2 restart whatsapp-bot",
+    "pm2-stop": "pm2 stop whatsapp-bot",
+    "pm2-logs": "pm2 logs whatsapp-bot"
   },
+  "keywords": [
+    "whatsapp",
+    "chatbot",
+    "groq",
+    "ai",
+    "nodejs",
+    "automation"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "whatsapp-web.js": "^1.19.5",
+    "whatsapp-web.js": "^1.23.0",
     "qrcode-terminal": "^0.12.0",
-    "moment-timezone": "^0.5.43",
+    "moment-timezone": "^0.5.45",
     "sqlite3": "^5.1.6",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "axios": "^1.6.8",
+    "dotenv": "^16.4.5",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=16.0.0"
   }
 }
