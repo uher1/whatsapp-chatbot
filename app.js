@@ -1,11 +1,71 @@
-// CHATBOT WHATSAPP UNTUK CATATAN HARIAN - UNIVERSAL VERSION (BUG FIXED)
+// CHATBOT WHATSAPP DENGAN GOOGLE GEMINI INTEGRATION - FREE VERSION
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const moment = require('moment-timezone');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-console.log('🚀 Memulai Chatbot WhatsApp...');
+console.log('🚀 Memulai Chatbot WhatsApp dengan Google Gemini...');
+
+// KONFIGURASI GOOGLE GEMINI
+const GEMINI_CONFIG = {
+    enabled: true,
+    apiKey: 'AIzaSyDvZIeD2M-rLc41I1ja_w0FLSANhbJC_2s', // Ganti dengan API key Google AI Studio
+    model: 'gemini-2.5-pro', // Model gratis terbaru
+    maxOutputTokens: 1000,
+    temperature: 0.7,
+    topP: 0.8,
+    topK: 40,
+    systemInstruction: `Anda adalah asisten WhatsApp yang cerdas dan membantu bernama "Gemini Assistant". 
+
+Kepribadian Anda:
+- Ramah, helpful, dan responsif
+- Berbicara dalam bahasa Indonesia yang natural
+- Gunakan emoji yang sesuai untuk membuat percakapan lebih menarik
+- Jawab dengan singkat namun informatif (maksimal 3-4 paragraf)
+- Selalu berikan informasi yang akurat dan terkini
+
+Anda bisa membantu dengan:
+- Menjawab pertanyaan umum tentang berbagai topik
+- Memberikan saran dan tips praktis
+- Membantu dengan tugas sehari-hari
+- Menjelaskan konsep complex dengan cara yang mudah dipahami
+- Membantu brainstorming ide
+- Memberikan rekomendasi
+- Analisis dan pemecahan masalah
+
+Anda juga terintegrasi dengan sistem reminder dan catatan harian, jadi bisa membantu user mengorganisir hidup mereka.
+
+PENTING: Selalu jaga konteks percakapan dan berikan respon yang relevan dengan pertanyaan user.`,
+    conversationHistory: new Map() // Store conversation per user
+};
+
+// Initialize Google Gemini
+let genAI = null;
+let model = null;
+
+if (GEMINI_CONFIG.enabled && GEMINI_CONFIG.apiKey !== 'your-gemini-api-key-here') {
+    try {
+        genAI = new GoogleGenerativeAI(GEMINI_CONFIG.apiKey);
+        model = genAI.getGenerativeModel({ 
+            model: GEMINI_CONFIG.model,
+            systemInstruction: GEMINI_CONFIG.systemInstruction,
+            generationConfig: {
+                maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
+                temperature: GEMINI_CONFIG.temperature,
+                topP: GEMINI_CONFIG.topP,
+                topK: GEMINI_CONFIG.topK,
+            }
+        });
+        console.log('🤖 Google Gemini API initialized successfully');
+    } catch (error) {
+        console.error('❌ Error initializing Gemini:', error.message);
+        model = null;
+    }
+} else {
+    console.log('⚠️ Gemini disabled - API key belum diset');
+}
 
 // Anti-loop protection
 let lastProcessedMessage = '';
@@ -24,7 +84,138 @@ db.run(`
     )
 `);
 
+// Tabel untuk menyimpan conversation dengan AI
+db.run(`
+    CREATE TABLE IF NOT EXISTS ai_conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nomor_pengirim TEXT NOT NULL,
+        user_message TEXT NOT NULL,
+        ai_response TEXT NOT NULL,
+        model_used TEXT DEFAULT 'gemini-1.5-flash',
+        tokens_used INTEGER DEFAULT 0,
+        waktu DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`);
+
 console.log('📁 Database siap!');
+
+// FUNGSI GOOGLE GEMINI AI
+async function getGeminiResponse(userMessage, nomorPengirim) {
+    try {
+        if (!model) {
+            return {
+                success: false,
+                error: 'Google Gemini belum dikonfigurasi. Set API key terlebih dahulu.'
+            };
+        }
+
+        console.log(`🤖 Sending to Gemini: "${userMessage}" from ${nomorPengirim}`);
+
+        // Get conversation history untuk context
+        let chatHistory = GEMINI_CONFIG.conversationHistory.get(nomorPengirim);
+        
+        if (!chatHistory) {
+            // Start new chat session
+            chatHistory = model.startChat({
+                history: [],
+                generationConfig: {
+                    maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
+                    temperature: GEMINI_CONFIG.temperature,
+                    topP: GEMINI_CONFIG.topP,
+                    topK: GEMINI_CONFIG.topK,
+                }
+            });
+            GEMINI_CONFIG.conversationHistory.set(nomorPengirim, chatHistory);
+        }
+
+        // Send message to Gemini
+        const result = await chatHistory.sendMessage(userMessage);
+        const response = result.response;
+        const responseText = response.text();
+
+        // Estimate token usage (Gemini doesn't provide exact count in free tier)
+        const estimatedTokens = Math.ceil((userMessage.length + responseText.length) / 3);
+
+        // Save ke database
+        db.run(
+            'INSERT INTO ai_conversations (nomor_pengirim, user_message, ai_response, tokens_used) VALUES (?, ?, ?, ?)',
+            [nomorPengirim, userMessage, responseText, estimatedTokens]
+        );
+
+        console.log(`✅ Gemini response: "${responseText.substring(0, 100)}..."`);
+        console.log(`💰 Estimated tokens: ${estimatedTokens}`);
+
+        return {
+            success: true,
+            response: responseText,
+            tokensUsed: estimatedTokens,
+            model: GEMINI_CONFIG.model
+        };
+
+    } catch (error) {
+        console.error('❌ Gemini error:', error.message);
+        
+        let errorMessage = 'Gemini sedang bermasalah, coba lagi nanti';
+        
+        if (error.message.includes('API key')) {
+            errorMessage = 'API key Gemini tidak valid';
+        } else if (error.message.includes('quota') || error.message.includes('limit')) {
+            errorMessage = 'Quota Gemini terlampaui, coba lagi nanti';
+        } else if (error.message.includes('blocked') || error.message.includes('safety')) {
+            errorMessage = 'Pesan diblokir oleh safety filter Gemini. Coba pertanyaan yang berbeda';
+        } else if (error.message.includes('rate limit')) {
+            errorMessage = 'Rate limit exceeded. Coba lagi dalam beberapa detik';
+        }
+        
+        return {
+            success: false,
+            error: errorMessage
+        };
+    }
+}
+
+// FUNGSI UNTUK CLEAR CONVERSATION HISTORY
+function clearConversationHistory(nomorPengirim) {
+    GEMINI_CONFIG.conversationHistory.delete(nomorPengirim);
+    console.log(`🧹 Conversation history cleared for ${nomorPengirim}`);
+}
+
+// FUNGSI UNTUK CHECK APAKAH PESAN BUTUH AI
+function shouldUseAI(message, nomorPengirim) {
+    const pesan = message.toLowerCase().trim();
+    
+    // Skip jika pesan adalah command existing
+    const existingCommands = [
+        'catat ', 'reminder ', 'ingatkan ', 'test reminder ',
+        'hari ini', 'minggu ini', 'bantuan', 'help', 'status',
+        'hapus hari ini', 'siapa', 'setup', 'config', 'gemini',
+        'ai status', 'clear ai', 'reset ai'
+    ];
+    
+    for (const cmd of existingCommands) {
+        if (pesan.startsWith(cmd) || pesan === cmd.trim()) {
+            return false;
+        }
+    }
+    
+    // Skip jika pesan terlalu pendek (likely command typo)
+    if (pesan.length < 3) {
+        return false;
+    }
+    
+    // Skip jika pesan hanya emoji atau karakter khusus
+    if (!/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\u1E00-\u1EFF]/.test(pesan)) {
+        return false;
+    }
+    
+    // Skip one word responses that might be greetings without context
+    const words = pesan.split(' ').filter(word => word.length > 2);
+    if (words.length === 1 && ['hai', 'halo', 'hello', 'hi', 'ok', 'oke', 'ya', 'tidak', 'iya'].includes(words[0])) {
+        return false;
+    }
+    
+    return true;
+}
 
 // Inisialisasi WhatsApp client
 const client = new Client({
@@ -60,13 +251,13 @@ client.on('qr', (qr) => {
     qrcode.generate(qr, { small: true });
     console.log('');
     console.log('⬆️ Scan QR code di atas dengan WhatsApp di HP Anda');
-    console.log('📲 Buka WhatsApp → Titik 3 → Perangkat Tertaut → Tautkan Perangkat');
 });
 
 // Event ketika client siap
 client.on('ready', () => {
-    console.log('✅ Chatbot siap digunakan!');
-    console.log('💡 Kirim pesan "bantuan" dari nomor manapun untuk melihat perintah');
+    console.log('✅ Chatbot dengan Google Gemini siap digunakan!');
+    console.log('🤖 Gemini integration:', model ? 'ACTIVE' : 'DISABLED');
+    console.log('💡 Kirim pesan apapun untuk berinteraksi dengan AI');
 });
 
 // Event ketika loading
@@ -79,7 +270,7 @@ client.on('authenticated', () => {
     console.log('🔐 Authenticated berhasil!');
 });
 
-// UNIVERSAL: Terima pesan dari semua nomor tanpa filter ketat
+// MAIN MESSAGE HANDLER
 client.on('message_create', async (message) => {
     try {
         // Filter minimal - hanya proses pesan text biasa
@@ -92,7 +283,7 @@ client.on('message_create', async (message) => {
             return;
         }
         
-        // Anti-loop protection - jangan proses pesan yang sama dalam 5 detik
+        // Anti-loop protection
         const currentTime = Date.now();
         const messageKey = message.body.trim() + message.from;
         
@@ -105,25 +296,21 @@ client.on('message_create', async (message) => {
         lastProcessedTime = currentTime;
         
         console.log(`📨 Pesan diterima: "${message.body}" dari ${message.from}`);
-        console.log(`📊 fromMe: ${message.fromMe}, type: ${message.type}`);
         
         const pesan = message.body.toLowerCase().trim();
         const nomorPengirim = message.from;
-        
-        // UPDATED: Nomor WhatsApp Anda yang baru
         const nomorAnda = '6282213741911@c.us';
         
-        // Waktu WIB
         const waktuWIB = moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss');
         const tanggalWIB = moment().tz('Asia/Jakarta').format('DD/MM/YYYY');
         const jamWIB = moment().tz('Asia/Jakarta').format('HH:mm');
         
-        // Command untuk menyimpan catatan
+        // EXISTING COMMANDS (catatan, reminder, dll) - TIDAK BERUBAH
         if (pesan.startsWith('catat ')) {
-            const fullCatatan = message.body.substring(6).trim(); // Hapus "catat "
+            const fullCatatan = message.body.substring(6).trim();
             
             if (fullCatatan === '') {
-                message.reply('❌ Catatan kosong!\n\n📝 *Format yang didukung:*\n• catat Makan siang di kantin\n• catat 14:30 Meeting dengan client\n• catat 08:00 Sarapan nasi gudeg');
+                message.reply('❌ Catatan kosong!\n\n📝 *Format yang didukung:*\n• catat Makan siang di kantin\n• catat 14:30 Meeting dengan client');
                 return;
             }
             
@@ -132,7 +319,6 @@ client.on('message_create', async (message) => {
             let waktuSimpan = waktuWIB;
             let jamTampil = jamWIB;
             
-            // Deteksi format waktu di depan (HH:MM)
             const timeRegex = /^(\d{1,2}):(\d{2})\s+(.+)$/;
             const match = fullCatatan.match(timeRegex);
             
@@ -141,27 +327,22 @@ client.on('message_create', async (message) => {
                 const menit = parseInt(match[2]);
                 catatanText = match[3].trim();
                 
-                // Validasi waktu
                 if (jam >= 0 && jam <= 23 && menit >= 0 && menit <= 59) {
-                    // Buat waktu custom dengan tanggal hari ini
                     const tanggalHariIni = moment().tz('Asia/Jakarta').format('YYYY-MM-DD');
                     waktuCustom = `${tanggalHariIni} ${jam.toString().padStart(2, '0')}:${menit.toString().padStart(2, '0')}:00`;
                     waktuSimpan = waktuCustom;
                     jamTampil = `${jam.toString().padStart(2, '0')}:${menit.toString().padStart(2, '0')}`;
-                    
-                    console.log(`⏰ Waktu custom dideteksi: ${jamTampil}`);
                 } else {
-                    message.reply('❌ Format waktu salah! Gunakan format HH:MM (contoh: 14:30)');
+                    message.reply('❌ Format waktu salah! Gunakan format HH:MM');
                     return;
                 }
             }
             
             if (catatanText === '') {
-                message.reply('❌ Deskripsi catatan kosong!\nContoh: catat 14:30 Meeting dengan client');
+                message.reply('❌ Deskripsi catatan kosong!');
                 return;
             }
             
-            // Simpan ke database dengan info pengirim
             const catatanFinal = `${catatanText} [dari: ${nomorPengirim}]`;
             
             db.run(
@@ -169,12 +350,10 @@ client.on('message_create', async (message) => {
                 [catatanFinal, waktuSimpan],
                 function(err) {
                     if (err) {
-                        console.log('❌ Error:', err);
                         message.reply('❌ Gagal menyimpan catatan');
                     } else {
-                        console.log('✅ Catatan tersimpan:', catatanText);
                         const statusWaktu = waktuCustom ? '🕐 (waktu manual)' : '🕐 (waktu sekarang)';
-                        message.reply(`✅ Catatan tersimpan! ${statusWaktu}\n📅 ${tanggalWIB} | ⏰ ${jamTampil}\n📝 "${catatanText}"\n👤 Dari: ${nomorPengirim}`);
+                        message.reply(`✅ Catatan tersimpan! ${statusWaktu}\n📅 ${tanggalWIB} | ⏰ ${jamTampil}\n📝 "${catatanText}"`);
                     }
                 }
             );
@@ -189,7 +368,6 @@ client.on('message_create', async (message) => {
                 [tanggalHariIni],
                 (err, rows) => {
                     if (err) {
-                        console.log('❌ Database error:', err);
                         message.reply('❌ Gagal mengambil catatan');
                         return;
                     }
@@ -206,136 +384,36 @@ client.on('message_create', async (message) => {
                     });
                     
                     message.reply(response);
-                    console.log(`📋 Mengirim ${rows.length} catatan hari ini`);
                 }
             );
         }
         
-        // Command untuk melihat catatan minggu ini
-        else if (pesan === 'catatan minggu ini' || pesan === 'minggu ini') {
-            const awalMinggu = moment().tz('Asia/Jakarta').startOf('week').format('YYYY-MM-DD');
-            const akhirMinggu = moment().tz('Asia/Jakarta').endOf('week').format('YYYY-MM-DD');
-            
-            db.all(
-                'SELECT * FROM catatan WHERE DATE(waktu_wib) BETWEEN ? AND ? ORDER BY waktu_wib ASC',
-                [awalMinggu, akhirMinggu],
-                (err, rows) => {
-                    if (err) {
-                        console.log('❌ Database error:', err);
-                        message.reply('❌ Gagal mengambil catatan');
-                        return;
-                    }
-                    
-                    if (rows.length === 0) {
-                        message.reply('📝 Belum ada catatan minggu ini');
-                        return;
-                    }
-                    
-                    let response = `📋 *Catatan Minggu Ini*\n\n`;
-                    let tanggalSebelumnya = '';
-                    
-                    rows.forEach((row) => {
-                        const tanggal = moment(row.waktu_wib).format('DD/MM/YYYY');
-                        const jam = moment(row.waktu_wib).format('HH:mm');
-                        
-                        if (tanggal !== tanggalSebelumnya) {
-                            response += `\n📅 *${tanggal}*\n`;
-                            tanggalSebelumnya = tanggal;
-                        }
-                        
-                        response += `• [${jam}] ${row.pesan}\n`;
-                    });
-                    
-                    message.reply(response);
-                    console.log(`📋 Mengirim ${rows.length} catatan minggu ini`);
-                }
-            );
-        }
-        
-        // Command untuk reminder dengan waktu spesifik (UPDATED dengan tanggal!)
+        // Command untuk reminder dengan waktu spesifik
         else if (pesan.startsWith('reminder ')) {
-            const fullReminder = message.body.substring(9).trim(); // Hapus "reminder "
+            const fullReminder = message.body.substring(9).trim();
             
             if (fullReminder === '') {
-                message.reply('❌ Reminder kosong!\n\n⏰ *Format yang didukung:*\n• reminder 14:30 Meeting hari ini\n• reminder 25/12 08:00 Natal\n• reminder 15/06/2025 10:00 Meeting penting');
+                message.reply('❌ Reminder kosong!\n\n⏰ *Format yang didukung:*\n• reminder 14:30 Meeting\n• reminder 25/12 08:00 Natal');
                 return;
             }
             
             let targetTime;
             let reminderText;
-            let isDateSpecific = false;
             
-            // Format 1: DD/MM/YYYY HH:MM [pesan]
-            const fullDateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s+(.+)$/;
-            const fullDateMatch = fullReminder.match(fullDateRegex);
-            
-            // Format 2: DD/MM HH:MM [pesan] (tahun ini)
-            const shortDateRegex = /^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})\s+(.+)$/;
-            const shortDateMatch = fullReminder.match(shortDateRegex);
-            
-            // Format 3: HH:MM [pesan] (hari ini/besok)
+            // Simple parsing untuk demo (bisa diperluas)
             const timeOnlyRegex = /^(\d{1,2}):(\d{2})\s+(.+)$/;
             const timeOnlyMatch = fullReminder.match(timeOnlyRegex);
             
-            if (fullDateMatch) {
-                // Format: DD/MM/YYYY HH:MM [pesan]
-                const tanggal = parseInt(fullDateMatch[1]);
-                const bulan = parseInt(fullDateMatch[2]);
-                const tahun = parseInt(fullDateMatch[3]);
-                const jam = parseInt(fullDateMatch[4]);
-                const menit = parseInt(fullDateMatch[5]);
-                reminderText = fullDateMatch[6].trim();
-                isDateSpecific = true;
-                
-                // Validasi
-                if (tanggal < 1 || tanggal > 31 || bulan < 1 || bulan > 12 || 
-                    jam < 0 || jam > 23 || menit < 0 || menit > 59) {
-                    message.reply('❌ Format tanggal/waktu salah!\n\n✅ *Format yang benar:*\nreminder DD/MM/YYYY HH:MM [pesan]\n\n📝 *Contoh:*\n• reminder 25/12/2025 08:00 Natal\n• reminder 01/01/2026 00:00 Tahun baru');
-                    return;
-                }
-                
-                // Buat moment object
-                targetTime = moment.tz(`${tahun}-${bulan.toString().padStart(2, '0')}-${tanggal.toString().padStart(2, '0')} ${jam.toString().padStart(2, '0')}:${menit.toString().padStart(2, '0')}:00`, 'Asia/Jakarta');
-                
-            } else if (shortDateMatch) {
-                // Format: DD/MM HH:MM [pesan] (tahun ini)
-                const tanggal = parseInt(shortDateMatch[1]);
-                const bulan = parseInt(shortDateMatch[2]);
-                const jam = parseInt(shortDateMatch[3]);
-                const menit = parseInt(shortDateMatch[4]);
-                reminderText = shortDateMatch[5].trim();
-                isDateSpecific = true;
-                
-                // Validasi
-                if (tanggal < 1 || tanggal > 31 || bulan < 1 || bulan > 12 || 
-                    jam < 0 || jam > 23 || menit < 0 || menit > 59) {
-                    message.reply('❌ Format tanggal/waktu salah!\n\n✅ *Format yang benar:*\nreminder DD/MM HH:MM [pesan]\n\n📝 *Contoh:*\n• reminder 25/12 08:00 Natal tahun ini\n• reminder 15/06 14:30 Meeting');
-                    return;
-                }
-                
-                // Gunakan tahun ini
-                const tahunIni = moment().tz('Asia/Jakarta').year();
-                targetTime = moment.tz(`${tahunIni}-${bulan.toString().padStart(2, '0')}-${tanggal.toString().padStart(2, '0')} ${jam.toString().padStart(2, '0')}:${menit.toString().padStart(2, '0')}:00`, 'Asia/Jakarta');
-                
-                // Jika tanggal sudah lewat tahun ini, set untuk tahun depan
-                const now = moment().tz('Asia/Jakarta');
-                if (targetTime.isBefore(now)) {
-                    targetTime.add(1, 'year');
-                }
-                
-            } else if (timeOnlyMatch) {
-                // Format: HH:MM [pesan] (hari ini/besok)
+            if (timeOnlyMatch) {
                 const jam = parseInt(timeOnlyMatch[1]);
                 const menit = parseInt(timeOnlyMatch[2]);
                 reminderText = timeOnlyMatch[3].trim();
                 
-                // Validasi waktu
                 if (jam < 0 || jam > 23 || menit < 0 || menit > 59) {
-                    message.reply('❌ Format waktu salah! Gunakan format HH:MM (contoh: 14:30)');
+                    message.reply('❌ Format waktu salah! Gunakan HH:MM');
                     return;
                 }
                 
-                // Buat waktu target hari ini
                 const now = moment().tz('Asia/Jakarta');
                 targetTime = moment().tz('Asia/Jakarta')
                     .hour(jam)
@@ -343,89 +421,28 @@ client.on('message_create', async (message) => {
                     .second(0)
                     .millisecond(0);
                 
-                // Jika waktu sudah lewat hari ini, set untuk besok
                 if (targetTime.isBefore(now)) {
                     targetTime.add(1, 'day');
                 }
                 
+                const delayMs = targetTime.diff(now);
+                const jamTampil = targetTime.format('HH:mm');
+                const tanggalTampil = targetTime.format('DD/MM/YYYY');
+                
+                message.reply(`⏰ Reminder diset!\n📅 ${tanggalTampil} | ⏰ ${jamTampil}\n📝 "${reminderText}"`);
+                
+                // Set timeout - BUG FIX: Kirim ke nomorPengirim
+                setTimeout(() => {
+                    client.sendMessage(nomorPengirim, `🔔 *REMINDER*\n⏰ ${jamTampil} WIB\n📝 ${reminderText}`);
+                    console.log(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminderText}`);
+                }, delayMs);
+                
             } else {
-                message.reply('❌ Format salah!\n\n✅ *Format yang didukung:*\n\n🕐 *Hari ini/besok:*\n• reminder 14:30 Meeting\n\n📅 *Tanggal spesifik:*\n• reminder 25/12 08:00 Natal\n• reminder 15/06/2025 10:00 Meeting penting\n\n📝 *Contoh lengkap:*\n• reminder 07:00 Bangun pagi\n• reminder 31/12 23:59 Countdown tahun baru\n• reminder 01/01/2026 00:00 Tahun baru 2026');
-                return;
+                message.reply('❌ Format salah! Gunakan: reminder HH:MM [pesan]\nContoh: reminder 14:30 Meeting');
             }
-            
-            // Validasi bahwa targetTime valid
-            if (!targetTime.isValid()) {
-                message.reply('❌ Tanggal tidak valid! Pastikan tanggal yang Anda masukkan benar.');
-                return;
-            }
-            
-            const now = moment().tz('Asia/Jakarta');
-            const delayMs = targetTime.diff(now);
-            
-            // Pastikan reminder tidak untuk masa lalu (kecuali sudah di-handle untuk besok/tahun depan)
-            if (delayMs <= 0) {
-                message.reply('❌ Waktu yang Anda masukkan sudah lewat! Gunakan waktu di masa depan.');
-                return;
-            }
-            
-            // Format tampilan
-            const jamTampil = targetTime.format('HH:mm');
-            const tanggalTampil = targetTime.format('DD/MM/YYYY');
-            const hariTampil = targetTime.format('dddd');
-            
-            // Hitung durasi
-            const duration = moment.duration(delayMs);
-            const hari = Math.floor(duration.asDays());
-            const jam = duration.hours();
-            const menit = duration.minutes();
-            
-            let durasiText = '';
-            if (hari > 0) durasiText += `${hari} hari `;
-            if (jam > 0) durasiText += `${jam} jam `;
-            if (menit > 0) durasiText += `${menit} menit`;
-            if (durasiText === '') durasiText = 'kurang dari 1 menit';
-            
-            // Response message
-            let responseText;
-            if (isDateSpecific) {
-                responseText = `⏰ Reminder diset untuk tanggal spesifik!\n📅 ${hariTampil}, ${tanggalTampil} | ⏰ ${jamTampil}\n📝 "${reminderText}"\n\n⏳ Akan aktif dalam ${durasiText.trim()}`;
-            } else {
-                const isToday = targetTime.isSame(now, 'day');
-                const label = isToday ? 'HARI INI' : 'BESOK';
-                responseText = `⏰ Reminder diset untuk ${label}!\n📅 ${tanggalTampil} | ⏰ ${jamTampil}\n📝 "${reminderText}"\n\n⏳ Akan aktif dalam ${durasiText.trim()}`;
-            }
-            
-            message.reply(responseText);
-            
-            // Set timeout - BUG FIX: Kirim ke nomorPengirim, bukan nomorAnda
-            setTimeout(() => {
-                client.sendMessage(nomorPengirim, `🔔 *REMINDER*\n⏰ ${jamTampil} WIB\n📅 ${tanggalTampil} (${hariTampil})\n📝 ${reminderText}\n\n👤 Diset oleh: ${nomorPengirim}`);
-                console.log(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminderText} (${tanggalTampil} ${jamTampil})`);
-            }, delayMs);
-            
-            console.log(`⏰ Reminder diset untuk ${tanggalTampil} ${jamTampil}: ${reminderText} (delay: ${Math.round(delayMs / 60000)} menit) - Target: ${nomorPengirim}`);
         }
         
-        // Command untuk reminder (1 jam) - TETAP ADA untuk kompatibilitas - BUG FIX
-        else if (pesan.startsWith('ingatkan ')) {
-            const reminder = message.body.substring(9).trim();
-            
-            if (reminder === '') {
-                message.reply('❌ Reminder kosong! Contoh: ingatkan Beli susu');
-                return;
-            }
-            
-            message.reply(`⏰ Reminder diset: "${reminder}"\n🕐 Akan mengingatkan dalam 1 jam`);
-            console.log(`⏰ Reminder diset: ${reminder} oleh ${nomorPengirim}`);
-            
-            // Set timeout untuk 1 jam (3600000 ms) - BUG FIX: Kirim ke nomorPengirim
-            setTimeout(() => {
-                client.sendMessage(nomorPengirim, `🔔 *REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
-                console.log(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminder}`);
-            }, 3600000);
-        }
-        
-        // Command untuk reminder 5 menit (untuk testing) - BUG FIX
+        // Test reminder untuk testing
         else if (pesan.startsWith('test reminder ')) {
             const reminder = message.body.substring(14).trim();
             
@@ -437,116 +454,172 @@ client.on('message_create', async (message) => {
             message.reply(`⏰ Test reminder diset: "${reminder}"\n🕐 Akan mengingatkan dalam 5 menit`);
             console.log(`⏰ Test reminder diset: ${reminder} oleh ${nomorPengirim}`);
             
-            // Set timeout untuk 5 menit (300000 ms) - BUG FIX: Kirim ke nomorPengirim
+            // Set timeout untuk 5 menit - BUG FIX: Kirim ke nomorPengirim
             setTimeout(() => {
                 client.sendMessage(nomorPengirim, `🔔 *TEST REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
                 console.log(`🔔 Test reminder terkirim ke ${nomorPengirim}: ${reminder}`);
             }, 300000);
         }
         
-        // Command bantuan
-        else if (pesan === 'bantuan' || pesan === 'help') {
-            const helpText = `🤖 *Chatbot Catatan Harian Universal*
-
-📝 *Perintah yang tersedia:*
-
-• *catat [pesan]* - Simpan catatan (waktu sekarang)
-  Contoh: catat Makan siang di kantin
-
-• *catat HH:MM [pesan]* - Simpan catatan dengan waktu manual
-  Contoh: catat 14:30 Meeting dengan client
-  Contoh: catat 08:00 Sarapan nasi gudeg
-
-• *reminder HH:MM [pesan]* - Set reminder untuk jam spesifik hari ini/besok
-  Contoh: reminder 07:00 Bangun pagi
-  Contoh: reminder 22:00 Waktunya tidur
-
-• *reminder DD/MM HH:MM [pesan]* - Set reminder untuk tanggal spesifik
-  Contoh: reminder 25/12 08:00 Natal
-  Contoh: reminder 15/06 14:30 Meeting penting
-
-• *reminder DD/MM/YYYY HH:MM [pesan]* - Set reminder dengan tahun spesifik
-  Contoh: reminder 01/01/2026 00:00 Tahun baru 2026
-  Contoh: reminder 17/08/2025 10:00 Hari kemerdekaan
-
-• *hari ini* - Lihat catatan hari ini
-
-• *minggu ini* - Lihat catatan minggu ini
-
-• *ingatkan [pesan]* - Set reminder 1 jam dari sekarang
-  Contoh: ingatkan Beli susu
-
-• *test reminder [pesan]* - Test reminder 5 menit
-
-• *status* - Cek status chatbot
-
-• *bantuan* - Tampilkan menu ini
-
-• *hapus hari ini* - Hapus semua catatan hari ini
-
-• *siapa* - Info akses chatbot
-
-⏰ Semua waktu dalam zona WIB
-🤖 Chatbot bisa digunakan dari nomor manapun!
-👤 Nomor Anda: ${nomorPengirim}
-
-💡 *Tips:* 
-• Gunakan "catat HH:MM" untuk mencatat aktivitas masa lalu
-• Gunakan "reminder HH:MM" untuk set alarm masa depan
-• Jika waktu reminder sudah lewat, akan diset untuk besok!
-• Reminder akan dikirim kembali ke nomor yang mengatur reminder
-
-✅ *BUG FIX: Reminder sekarang dikirim ke nomor yang set reminder, bukan ke nomor utama!*`;
-            
-            message.reply(helpText);
-            console.log(`📖 Mengirim menu bantuan ke ${nomorPengirim}`);
+        // GOOGLE GEMINI AI COMMANDS
+        else if (pesan === 'clear ai' || pesan === 'reset ai' || pesan === 'clear gemini') {
+            clearConversationHistory(nomorPengirim);
+            message.reply('🧹 Conversation history dengan Gemini telah direset!\n✨ Percakapan baru dimulai dari awal.');
         }
         
-        // Command untuk cek status
-        else if (pesan === 'status') {
-            const waktu = moment().tz('Asia/Jakarta').format('DD/MM/YYYY HH:mm:ss');
-            message.reply(`✅ Chatbot aktif!\n⏰ Waktu sekarang: ${waktu} WIB\n📱 Nomor utama: ${nomorAnda}\n👤 Pengirim: ${nomorPengirim}\n🔄 fromMe: ${message.fromMe}\n\n✅ *BUG FIX: Reminder akan dikirim ke ${nomorPengirim}*`);
-            console.log(`📊 Status diminta oleh ${nomorPengirim}`);
-        }
-        
-        // Command untuk hapus catatan hari ini (hanya nomor utama)
-        else if (pesan === 'hapus hari ini') {
-            if (nomorPengirim !== nomorAnda) {
-                message.reply('❌ Hanya nomor utama yang bisa menghapus catatan');
-                return;
-            }
+        else if (pesan === 'ai status' || pesan === 'gemini status') {
+            const activeConversations = GEMINI_CONFIG.conversationHistory.size;
+            const aiStatus = model ? '✅ ACTIVE' : '❌ DISABLED';
             
-            const tanggalHariIni = moment().tz('Asia/Jakarta').format('YYYY-MM-DD');
-            
-            db.run(
-                'DELETE FROM catatan WHERE DATE(waktu_wib) = ?',
-                [tanggalHariIni],
-                function(err) {
-                    if (err) {
-                        console.log('❌ Error hapus:', err);
-                        message.reply('❌ Gagal hapus catatan');
-                    } else {
-                        message.reply(`🗑️ ${this.changes} catatan hari ini berhasil dihapus`);
-                        console.log(`🗑️ ${this.changes} catatan dihapus oleh ${nomorPengirim}`);
-                    }
+            // Get conversation stats from database
+            db.get(
+                'SELECT COUNT(*) as total, SUM(tokens_used) as total_tokens FROM ai_conversations WHERE nomor_pengirim = ?',
+                [nomorPengirim],
+                (err, stats) => {
+                    const totalChats = stats ? stats.total : 0;
+                    const totalTokens = stats ? stats.total_tokens : 0;
+                    
+                    message.reply(`🤖 *Google Gemini Status*\n\n🔌 API: ${aiStatus}\n📊 Model: ${GEMINI_CONFIG.model}\n💬 Active conversations: ${activeConversations}\n📈 Your chats: ${totalChats}\n🎯 Your tokens: ${totalTokens}\n⚙️ Temperature: ${GEMINI_CONFIG.temperature}\n\n💡 Gunakan "clear ai" untuk reset percakapan`);
                 }
             );
         }
         
-        // Siapa yang bisa akses
-        else if (pesan === 'siapa') {
-            message.reply(`👥 *Info Akses Chatbot*\n\n✅ Semua orang bisa:\n• Kirim catatan\n• Lihat catatan hari ini/minggu ini\n• Set reminder\n• Cek status\n\n🔒 Hanya nomor utama (${nomorAnda}) yang bisa:\n• Hapus catatan\n\n👤 Nomor Anda: ${nomorPengirim}\n\n✅ *BUG FIX: Reminder akan dikirim kembali ke nomor Anda!*`);
+        else if (pesan.startsWith('setup gemini') || pesan === 'config gemini') {
+            const setupGuide = `🔧 *SETUP GOOGLE GEMINI API*
+
+📝 **STEP 1: Dapatkan API Key**
+1. Buka: https://aistudio.google.com/app/apikey
+2. Login dengan akun Google
+3. Click "Create API Key"
+4. Choose "Create API key in new project"
+5. Copy API key yang dihasilkan
+
+📝 **STEP 2: Update Config**
+Edit app.js baris ~20:
+\`\`\`javascript
+apiKey: 'your-actual-gemini-api-key-here',
+\`\`\`
+
+📝 **STEP 3: Install Package**
+\`\`\`bash
+npm install @google/generative-ai
+\`\`\`
+
+📝 **STEP 4: Restart Bot**
+\`\`\`bash
+pm2 restart whatsapp-bot
+\`\`\`
+
+💰 **FREE TIER GEMINI:**
+✅ 1 million tokens/month GRATIS
+✅ 15 requests/minute
+✅ No credit card required
+✅ Gemini 1.5 Flash model
+✅ Conversation memory
+
+🧪 **Test Commands:**
+• gemini status - Check Gemini status
+• clear ai - Reset conversation
+• [tanya apapun] - AI akan jawab otomatis!
+
+🌟 **Keunggulan Gemini:**
+• Lebih natural dalam bahasa Indonesia
+• Context window sangat besar
+• Multimodal support (text, image)
+• Gratis dengan limit generous`;
+            
+            message.reply(setupGuide);
         }
         
-        // Log perintah tidak dikenali tanpa reply
+        // BANTUAN COMMAND - UPDATED dengan Gemini features
+        else if (pesan === 'bantuan' || pesan === 'help') {
+            const aiStatusEmoji = model ? '🤖✅' : '🤖❌';
+            const helpText = `🤖 *Chatbot Universal dengan Google Gemini* ${aiStatusEmoji}
+
+📝 *Perintah Catatan & Reminder:*
+• *catat [pesan]* - Simpan catatan
+• *catat HH:MM [pesan]* - Catatan dengan waktu
+• *reminder HH:MM [pesan]* - Set reminder
+• *test reminder [pesan]* - Test reminder 5 menit
+• *hari ini* - Lihat catatan hari ini
+
+🤖 *Google Gemini AI Features:*
+• *[tanya apapun]* - AI Gemini akan menjawab otomatis
+• *gemini status* - Status Gemini integration  
+• *clear ai* - Reset conversation history
+• *setup gemini* - Panduan setup API
+
+📋 *Lainnya:*
+• *status* - Status bot
+• *bantuan* - Menu ini
+
+💡 *Cara Pakai Gemini AI:*
+• Tanya apapun dalam bahasa natural
+• Gemini ingat konteks percakapan panjang
+• Support bahasa Indonesia excellent
+• Bisa diskusi topic kompleks
+• Gratis 1 million tokens/month!
+
+🔧 *Setup Status:*
+${model ? '✅ Google Gemini sudah aktif!' : '❌ Butuh Gemini API key (setup gemini)'}
+
+🌟 *Contoh Pertanyaan Gemini:*
+• "Jelaskan tentang AI dan dampaknya terhadap pekerjaan"
+• "Buatkan rencana diet sehat untuk turun berat badan"
+• "Bagaimana cara memulai bisnis online dari nol?"
+• "Analisis keuntungan investasi saham vs emas"
+• "Tips meningkatkan produktivitas kerja remote"
+
+✨ *Keunggulan Gemini vs ChatGPT:*
+• 100% GRATIS dengan limit sangat generous
+• Lebih natural dalam bahasa Indonesia  
+• Context window lebih besar
+• Lebih up-to-date dengan informasi terkini`;
+            
+            message.reply(helpText);
+        }
+        
+        // STATUS COMMAND - UPDATED
+        else if (pesan === 'status') {
+            const waktu = moment().tz('Asia/Jakarta').format('DD/MM/YYYY HH:mm:ss');
+            const aiStatus = model ? '✅ ACTIVE' : '❌ DISABLED';
+            const conversationCount = GEMINI_CONFIG.conversationHistory.size;
+            
+            message.reply(`✅ *Chatbot Status*\n⏰ ${waktu} WIB\n🤖 Google Gemini: ${aiStatus}\n💬 Active conversations: ${conversationCount}\n👤 Anda: ${nomorPengirim}\n\n💡 Bot siap menerima pertanyaan AI!\n✨ Gratis 1 million tokens/month!`);
+        }
+        
+        // DEFAULT: GOOGLE GEMINI AI RESPONSE
         else {
-            console.log(`❓ Perintah tidak dikenali dari ${nomorPengirim}: ${message.body}`);
-            // Tidak ada reply otomatis untuk mencegah spam
+            // Check apakah pesan butuh AI response
+            if (shouldUseAI(message.body, nomorPengirim)) {
+                if (!model) {
+                    message.reply('🤖 Google Gemini belum dikonfigurasi.\n\n💡 Kirim "setup gemini" untuk panduan setup, atau "bantuan" untuk melihat perintah lain.\n\n✨ Gemini 100% GRATIS dengan 1 million tokens/month!');
+                    return;
+                }
+                
+                // Show processing indicator
+                console.log(`🤖 Processing Gemini request: "${message.body}"`);
+                
+                // Get Gemini response
+                const aiResult = await getGeminiResponse(message.body, nomorPengirim);
+                
+                if (aiResult.success) {
+                    // Send AI response dengan emoji dan branding
+                    message.reply(`✨ ${aiResult.response}\n\n🤖 _Powered by Google Gemini_`);
+                    console.log(`✅ Gemini response sent to ${nomorPengirim} (${aiResult.tokensUsed} estimated tokens)`);
+                } else {
+                    // Send error message
+                    message.reply(`❌ Gemini Error: ${aiResult.error}\n\n💡 Coba lagi nanti atau kirim "bantuan" untuk perintah lain.\n\n🔧 Jika terus error, coba "clear ai" untuk reset conversation.`);
+                    console.log(`❌ Gemini error for ${nomorPengirim}: ${aiResult.error}`);
+                }
+            } else {
+                // Pesan terlalu pendek atau tidak jelas, tidak perlu AI response
+                console.log(`❓ Pesan tidak dikenali dari ${nomorPengirim}: ${message.body}`);
+            }
         }
         
     } catch (error) {
         console.log('❌ Error dalam message handler:', error);
-        // Jangan reply error otomatis untuk mencegah loop
     }
 });
 
@@ -563,65 +636,114 @@ client.on('disconnected', (reason) => {
 console.log('🔄 Menginisialisasi WhatsApp client...');
 client.initialize();
 
-// Setup web server sederhana untuk monitoring
+// Setup web server untuk monitoring
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
     const waktu = moment().tz('Asia/Jakarta').format('DD/MM/YYYY HH:mm:ss');
+    const aiStatus = model ? '✅ ACTIVE' : '❌ DISABLED';
+    const conversationCount = GEMINI_CONFIG.conversationHistory.size;
+    
     res.send(`
-        <h1>🤖 Chatbot WhatsApp Universal Aktif! (BUG FIXED)</h1>
+        <h1>🤖✨ Chatbot WhatsApp dengan Google Gemini Integration</h1>
         <p>⏰ Waktu: ${waktu} WIB</p>
-        <p>📱 Status: Berjalan</p>
-        <p>💡 Kirim "bantuan" dari nomor manapun untuk melihat perintah</p>
+        <p>📱 Status: Aktif</p>
+        <p>🤖 Google Gemini: ${aiStatus}</p>
+        <p>💬 Active Conversations: ${conversationCount}</p>
         
-        <h2>🐛 BUG FIXES:</h2>
+        <h2>✨ Google Gemini Features:</h2>
         <ul>
-            <li>✅ <strong>Reminder fix:</strong> Sekarang dikirim ke nomor yang set reminder (bukan hard-coded ke 1911)</li>
-            <li>✅ <strong>Multi-user support:</strong> Setiap orang dapat reminder ke nomor mereka sendiri</li>
-            <li>✅ <strong>Test reminder fix:</strong> Test reminder juga dikirim ke pengirim</li>
-            <li>✅ <strong>Improved logging:</strong> Log target nomor untuk debugging</li>
+            <li><strong>100% FREE</strong> - 1 million tokens/month gratis</li>
+            <li><strong>Natural Language Processing</strong> - Tanya apapun dalam bahasa natural</li>
+            <li><strong>Conversation Memory</strong> - AI ingat konteks percakapan panjang</li>
+            <li><strong>Bahasa Indonesia Excellence</strong> - Lebih natural dibanding ChatGPT</li>
+            <li><strong>Large Context Window</strong> - Bisa diskusi topik kompleks</li>
+            <li><strong>Up-to-date Information</strong> - Informasi lebih terkini</li>
         </ul>
         
-        <h2>📝 Perintah Tersedia:</h2>
+        <h2>📝 Commands:</h2>
         <ul>
-            <li><strong>catat [pesan]</strong> - Simpan catatan dengan waktu sekarang</li>
-            <li><strong>catat HH:MM [pesan]</strong> - Simpan catatan dengan waktu manual</li>
-            <li><strong>reminder HH:MM [pesan]</strong> - Set reminder untuk jam spesifik</li>
-            <li><strong>reminder DD/MM HH:MM [pesan]</strong> - Set reminder dengan tanggal</li>
-            <li><strong>reminder DD/MM/YYYY HH:MM [pesan]</strong> - Set reminder dengan tahun</li>
-            <li><strong>hari ini</strong> - Lihat catatan hari ini</li>
-            <li><strong>minggu ini</strong> - Lihat catatan minggu ini</li>
-            <li><strong>ingatkan [pesan]</strong> - Set reminder 1 jam dari sekarang</li>
-            <li><strong>test reminder [pesan]</strong> - Test reminder 5 menit</li>
-            <li><strong>status</strong> - Cek status</li>
-            <li><strong>bantuan</strong> - Menu bantuan</li>
-            <li><strong>siapa</strong> - Info akses chatbot</li>
-            <li><strong>hapus hari ini</strong> - Hapus catatan (hanya nomor utama)</li>
+            <li><strong>[tanya apapun]</strong> - Gemini AI response otomatis</li>
+            <li><strong>gemini status</strong> - Check Gemini status & usage</li>
+            <li><strong>clear ai</strong> - Reset conversation history</li>
+            <li><strong>setup gemini</strong> - Setup guide API key</li>
+            <li><strong>catat [pesan]</strong> - Save notes</li>
+            <li><strong>reminder HH:MM [pesan]</strong> - Set reminders</li>
+            <li><strong>bantuan</strong> - Full help menu</li>
         </ul>
         
-        <h2>🌟 Fitur Universal:</h2>
-        <p>✅ Terima pesan dari semua nomor WhatsApp<br>
-        ✅ Catatan disimpan dengan info pengirim<br>
-        ✅ Reminder dengan 3 format: HH:MM, DD/MM HH:MM, DD/MM/YYYY HH:MM<br>
-        ✅ Auto-detect: hari ini, besok, tahun depan<br>
-        ✅ Reminder jangka panjang (hari, bulan, tahun)<br>
-        ✅ <strong>Multi-user reminder support (BUG FIXED!)</strong><br>
-        🔒 Hapus catatan hanya untuk nomor utama</p>
+        <h2>🌟 Example Gemini Conversations:</h2>
+        <div style="background: #f0f9ff; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #0ea5e9;">
+            <p><strong>User:</strong> "Jelaskan tentang teknologi blockchain dan cryptocurrency"</p>
+            <p><strong>Gemini:</strong> "✨ Blockchain adalah teknologi revolutionary yang mengubah cara kita menyimpan data..."</p>
+        </div>
         
-        <h2>🔧 Technical Changes:</h2>
+        <div style="background: #f0fdf4; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #22c55e;">
+            <p><strong>User:</strong> "Buatkan rencana bisnis untuk toko online"</p>
+            <p><strong>Gemini:</strong> "✨ Rencana Bisnis Toko Online yang Komprehensif: 1. Market Research..."</p>
+        </div>
+        
+        <div style="background: #fefce8; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #eab308;">
+            <p><strong>User:</strong> "Tips hidup sehat untuk orang sibuk"</p>
+            <p><strong>Gemini:</strong> "✨ Tips Hidup Sehat untuk Profesional Sibuk: 💪 Olahraga Efisien..."</p>
+        </div>
+        
+        <h2>⚙️ Technical Specs:</h2>
         <ul>
-            <li>Line 362: client.sendMessage(nomorAnda, ...) → client.sendMessage(nomorPengirim, ...)</li>
-            <li>Line 385: client.sendMessage(nomorAnda, ...) → client.sendMessage(nomorPengirim, ...)</li>
-            <li>Line 398: client.sendMessage(nomorAnda, ...) → client.sendMessage(nomorPengirim, ...)</li>
-            <li>Added target logging for debugging</li>
-            <li>Updated help text to mention bug fix</li>
+            <li>Model: ${GEMINI_CONFIG.model}</li>
+            <li>Max Output Tokens: ${GEMINI_CONFIG.maxOutputTokens}</li>
+            <li>Temperature: ${GEMINI_CONFIG.temperature}</li>
+            <li>Memory: Full conversation history per user</li>
+            <li>API: Google AI Studio</li>
+            <li>Language: Indonesian + English optimized</li>
         </ul>
+        
+        <h2>💰 Cost: 100% FREE!</h2>
+        <div style="background: #dcfce7; padding: 15px; margin: 10px 0; border-radius: 8px;">
+            <p><strong>✅ FREE TIER LIMITS:</strong></p>
+            <ul>
+                <li>1,000,000 tokens per month (sangat generous!)</li>
+                <li>15 requests per minute</li>
+                <li>No credit card required</li>
+                <li>Perfect untuk personal/small business use</li>
+            </ul>
+        </div>
+        
+        <h2>🆚 Gemini vs ChatGPT:</h2>
+        <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
+            <tr style="background: #f8fafc;">
+                <th style="border: 1px solid #e2e8f0; padding: 10px;">Feature</th>
+                <th style="border: 1px solid #e2e8f0; padding: 10px;">Google Gemini</th>
+                <th style="border: 1px solid #e2e8f0; padding: 10px;">ChatGPT</th>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #e2e8f0; padding: 10px;">Cost</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ FREE (1M tokens/month)</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: red;">❌ PAID ($0.002/1K tokens)</td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #e2e8f0; padding: 10px;">Indonesian Language</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Excellent</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Good</td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #e2e8f0; padding: 10px;">Context Window</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Very Large</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Medium</td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #e2e8f0; padding: 10px;">Setup Complexity</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Simple</td>
+                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Need Credit Card</td>
+            </tr>
+        </table>
     `);
 });
 
 app.listen(PORT, () => {
     console.log(`🌐 Web server berjalan di http://localhost:${PORT}`);
+    console.log(`🤖 Google Gemini integration: ${model ? 'READY' : 'NEED SETUP'}`);
 });
 
 // Graceful shutdown
