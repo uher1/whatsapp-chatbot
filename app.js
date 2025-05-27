@@ -11,11 +11,11 @@ console.log('🚀 Memulai Chatbot WhatsApp dengan Google Gemini...');
 // KONFIGURASI GOOGLE GEMINI
 const GEMINI_CONFIG = {
     enabled: true,
-    apiKey: 'AIzaSyDvZIeD2M-rLc41I1ja_w0FLSANhbJC_2s', // Ganti dengan API key Google AI Studio
-    model: 'gemini-2.5-pro', // Model gratis terbaru
-    maxOutputTokens: 1000,
+    apiKey: 'AIzaSyDvZIeD2M-rLc41I1ja_w0FLSANhbJC_2s', // Your premium API key
+    model: 'gemini-1.5-pro', // FIXED: Model premium yang benar untuk langganan 15 bulan
+    maxOutputTokens: 2000, // Increased untuk response premium yang lebih detail
     temperature: 0.7,
-    topP: 0.8,
+    topP: 0.9, // Enhanced creativity untuk premium mode
     topK: 40,
     systemInstruction: `Anda adalah asisten WhatsApp yang cerdas dan membantu bernama "Gemini Assistant". 
 
@@ -181,6 +181,7 @@ function clearConversationHistory(nomorPengirim) {
 }
 
 // FUNGSI UNTUK CHECK APAKAH PESAN BUTUH AI
+// FUNGSI UNTUK CHECK APAKAH PESAN BUTUH AI - FIXED PREMIUM VERSION
 function shouldUseAI(message, nomorPengirim) {
     const pesan = message.toLowerCase().trim();
     
@@ -189,31 +190,47 @@ function shouldUseAI(message, nomorPengirim) {
         'catat ', 'reminder ', 'ingatkan ', 'test reminder ',
         'hari ini', 'minggu ini', 'bantuan', 'help', 'status',
         'hapus hari ini', 'siapa', 'setup', 'config', 'gemini',
-        'ai status', 'clear ai', 'reset ai'
+        'ai status', 'clear ai', 'reset ai', 'gemini status',
+        'setup gemini', 'config gemini', 'catatan hari ini'
     ];
     
     for (const cmd of existingCommands) {
         if (pesan.startsWith(cmd) || pesan === cmd.trim()) {
+            console.log(`🚫 Skip command: ${pesan}`);
             return false;
         }
     }
     
-    // Skip jika pesan terlalu pendek (likely command typo)
-    if (pesan.length < 3) {
+    // Skip jika pesan kosong atau hanya whitespace
+    if (pesan.length === 0) {
+        console.log(`🚫 Skip empty message`);
         return false;
     }
     
-    // Skip jika pesan hanya emoji atau karakter khusus
+    // Skip jika pesan hanya emoji atau karakter khusus (tanpa huruf/angka)
     if (!/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\u1E00-\u1EFF]/.test(pesan)) {
+        console.log(`🚫 Skip special chars only: ${pesan}`);
         return false;
     }
     
-    // Skip one word responses that might be greetings without context
-    const words = pesan.split(' ').filter(word => word.length > 2);
-    if (words.length === 1 && ['hai', 'halo', 'hello', 'hi', 'ok', 'oke', 'ya', 'tidak', 'iya'].includes(words[0])) {
+    // PREMIUM MODE: LEBIH PERMISSIVE - Allow semua greeting & conversation
+    // Hanya skip jika benar-benar tidak jelas atau accident
+    
+    // Skip HANYA jika single digit atau character accident
+    if (pesan.length === 1 && /^[0-9\.\?\!]$/.test(pesan)) {
+        console.log(`🚫 Skip single char: ${pesan}`);
         return false;
     }
     
+    // Skip common typos atau accident clicks
+    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm'];
+    if (skipPatterns.includes(pesan)) {
+        console.log(`🚫 Skip pattern: ${pesan}`);
+        return false;
+    }
+    
+    // SEMUA YANG LAIN KIRIM KE AI (termasuk "halo", "hai", greeting, dll)
+    console.log(`✅ PREMIUM AI akan proses: "${pesan}"`);
     return true;
 }
 
