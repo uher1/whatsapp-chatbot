@@ -1,27 +1,39 @@
-// CHATBOT WHATSAPP DENGAN GROQ AI - 100% FREE FOREVER
+// CHATBOT WHATSAPP DENGAN GROQ AI - SECURE VERSION
+require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const moment = require('moment-timezone');
 const sqlite3 = require('sqlite3').verbose();
 const express = require('express');
 const axios = require('axios');
+const winston = require('winston');
 
-console.log('🚀 Memulai Chatbot WhatsApp dengan Groq AI (100% FREE)...');
+console.log('🚀 Memulai Chatbot WhatsApp dengan Groq AI (Secure Version)...');
 
-// KONFIGURASI GROQ AI - 100% GRATIS SELAMANYA
+// SETUP LOGGING
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.colorize(),
+        winston.format.simple()
+    ),
+    transports: [
+        new winston.transports.File({ filename: 'error.log', level: 'error' }),
+        new winston.transports.File({ filename: 'combined.log' }),
+        new winston.transports.Console()
+    ]
+});
+
+// KONFIGURASI GROQ AI - SECURE VERSION
 const GROQ_CONFIG = {
     enabled: true,
-    apiKey: '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', // Get from console.groq.com - FREE!
-    model: 'llama-3.1-70b-versatile', // Model terpintar yang gratis
-    // Alternative free models:
-    // model: 'llama-3.1-8b-instant', // Paling cepat
-    // model: 'mixtral-8x7b-32768', // Good balance
-    
+    apiKey: process.env.GROQ_API_KEY || '',
+    model: 'llama-3.1-70b-versatile',
     baseURL: 'https://api.groq.com/openai/v1',
     maxTokens: 1000,
     temperature: 0.7,
     systemMessage: `Anda adalah asisten WhatsApp yang cerdas dan membantu bernama "Groq Assistant". 
-
 Kepribadian Anda:
 - Ramah, helpful, dan responsif
 - Berbicara dalam bahasa Indonesia yang natural dan mengalir
@@ -29,8 +41,7 @@ Kepribadian Anda:
 - Jawab dengan singkat namun informatif (maksimal 3-4 paragraf)
 - Selalu berikan informasi yang akurat dan up-to-date
 
-Anda powered by Groq - AI inference paling cepat di dunia, dan 100% GRATIS!
-
+Anda powered by Groq - AI inference paling cepat di dunia!
 Anda bisa membantu dengan:
 - Menjawab pertanyaan umum tentang berbagai topik
 - Memberikan saran dan tips praktis
@@ -52,75 +63,136 @@ Gaya Response:
 - Struktur yang jelas dengan bullet points jika perlu
 - Emoji yang contextual dan professional
 - Berikan insights tambahan yang valuable
-- Proactive dalam memberikan follow-up suggestions
-
-PENTING: Groq adalah platform AI gratis terbaik - super cepat dan tidak perlu bayar!`,
+- Proactive dalam memberikan follow-up suggestions`,
     
-    conversationHistory: new Map(), // Store conversation per user
-    
-    // Free tier limits (very generous!)
-    dailyLimit: 6000, // 6000 requests per day - FREE!
+    conversationHistory: new Map(),
+    dailyLimit: 6000,
     requestCount: 0,
     lastReset: new Date().toDateString()
 };
 
-// Initialize Groq API client
+// Initialize Groq API client dengan validation
 let groqClient = null;
-
-if (GROQ_CONFIG.enabled && GROQ_CONFIG.apiKey !== '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') {
+if (GROQ_CONFIG.enabled && GROQ_CONFIG.apiKey && GROQ_CONFIG.apiKey.startsWith('gsk_')) {
     groqClient = axios.create({
         baseURL: GROQ_CONFIG.baseURL,
         headers: {
             'Authorization': `Bearer ${GROQ_CONFIG.apiKey}`,
             'Content-Type': 'application/json'
         },
-        timeout: 30000 // 30 second timeout
+        timeout: 30000
     });
-    console.log('🤖 Groq AI API initialized successfully');
-    console.log('💰 100% FREE - No payment required ever!');
+    logger.info('🤖 Groq AI API initialized successfully');
+    logger.info('🔐 API Key validated and secured');
 } else {
-    console.log('⚠️ Groq disabled - API key belum diset');
+    logger.warn('⚠️ Groq disabled - Invalid or missing API key');
+    logger.warn('💡 Set GROQ_API_KEY in .env file');
+}
+
+// RATE LIMITING
+const rateLimiter = new Map();
+function isRateLimited(userId) {
+    const now = Date.now();
+    const lastRequest = rateLimiter.get(userId) || 0;
+    const cooldown = 2000; // 2 seconds between requests
+    
+    if (now - lastRequest < cooldown) {
+        return true;
+    }
+    
+    rateLimiter.set(userId, now);
+    return false;
+}
+
+// INPUT SANITIZATION
+function sanitizeInput(text) {
+    if (!text || typeof text !== 'string') return '';
+    return text
+        .trim()
+        .replace(/\s+/g, ' ')
+        .substring(0, 2000);
 }
 
 // Anti-loop protection
 let lastProcessedMessage = '';
 let lastProcessedTime = 0;
 
-// Setup database
-const db = new sqlite3.Database('catatan.db');
+// Setup database dengan error handling
+const db = new sqlite3.Database('catatan.db', (err) => {
+    if (err) {
+        logger.error('❌ Database connection error:', err);
+    } else {
+        logger.info('📁 Database connected successfully');
+    }
+});
+
+// Database error handling
+db.on('error', (err) => {
+    logger.error('❌ Database error:', err);
+});
 
 // Buat tabel jika belum ada
-db.run(`
-    CREATE TABLE IF NOT EXISTS catatan (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        pesan TEXT NOT NULL,
-        waktu DATETIME DEFAULT CURRENT_TIMESTAMP,
-        waktu_wib TEXT
-    )
-`);
+db.serialize(() => {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS catatan (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pesan TEXT NOT NULL,
+            waktu DATETIME DEFAULT CURRENT_TIMESTAMP,
+            waktu_wib TEXT
+        )
+    `);
 
-// Tabel untuk menyimpan conversation dengan AI
-db.run(`
-    CREATE TABLE IF NOT EXISTS ai_conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nomor_pengirim TEXT NOT NULL,
-        user_message TEXT NOT NULL,
-        ai_response TEXT NOT NULL,
-        model_used TEXT DEFAULT 'llama-3.1-70b-versatile',
-        tokens_used INTEGER DEFAULT 0,
-        waktu DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-`);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS ai_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nomor_pengirim TEXT NOT NULL,
+            user_message TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            model_used TEXT DEFAULT 'llama-3.1-70b-versatile',
+            tokens_used INTEGER DEFAULT 0,
+            waktu DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+});
 
-console.log('📁 Database siap!');
+logger.info('📁 Database tables ready!');
 
-// FUNGSI GROQ AI - 100% FREE
+// MEMORY CLEANUP - Cleanup old conversations periodically
+setInterval(() => {
+    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+    const now = Date.now();
+    
+    for (const [userId, history] of GROQ_CONFIG.conversationHistory) {
+        if (history.length === 0 || (now - (history[history.length - 1].timestamp || 0)) > maxAge) {
+            GROQ_CONFIG.conversationHistory.delete(userId);
+            logger.info(`🧹 Cleaned up conversation for ${userId}`);
+        }
+    }
+    
+    // Cleanup rate limiter
+    for (const [userId, lastTime] of rateLimiter) {
+        if (now - lastTime > 60000) { // 1 minute
+            rateLimiter.delete(userId);
+        }
+    }
+}, 60 * 60 * 1000); // Run every hour
+
+// FUNGSI GROQ AI - IMPROVED VERSION
 async function getGroqResponse(userMessage, nomorPengirim) {
     try {
         if (!groqClient) {
             return {
                 success: false,
-                error: 'Groq AI belum dikonfigurasi. Set API key terlebih dahulu.'
+                error: 'Groq AI belum dikonfigurasi. Set GROQ_API_KEY terlebih dahulu.'
+            };
+        }
+
+        // Sanitize input
+        const sanitizedMessage = sanitizeInput(userMessage);
+        if (!sanitizedMessage) {
+            return {
+                success: false,
+                error: 'Pesan kosong atau tidak valid'
             };
         }
 
@@ -129,9 +201,10 @@ async function getGroqResponse(userMessage, nomorPengirim) {
         if (today !== GROQ_CONFIG.lastReset) {
             GROQ_CONFIG.requestCount = 0;
             GROQ_CONFIG.lastReset = today;
+            logger.info('🔄 Daily limit reset');
         }
 
-        // Check daily limit (generous 6000/day!)
+        // Check daily limit
         if (GROQ_CONFIG.requestCount >= GROQ_CONFIG.dailyLimit) {
             return {
                 success: false,
@@ -139,7 +212,7 @@ async function getGroqResponse(userMessage, nomorPengirim) {
             };
         }
 
-        console.log(`🤖 Sending to Groq: "${userMessage}" from ${nomorPengirim}`);
+        logger.info(`🤖 Sending to Groq: "${sanitizedMessage.substring(0, 50)}..." from ${nomorPengirim}`);
 
         // Get conversation history untuk context
         let chatHistory = GROQ_CONFIG.conversationHistory.get(nomorPengirim) || [];
@@ -152,8 +225,8 @@ async function getGroqResponse(userMessage, nomorPengirim) {
         // Build messages array
         const messages = [
             { role: 'system', content: GROQ_CONFIG.systemMessage },
-            ...chatHistory,
-            { role: 'user', content: userMessage }
+            ...chatHistory.map(h => ({ role: h.role, content: h.content })),
+            { role: 'user', content: sanitizedMessage }
         ];
 
         // Send to Groq
@@ -168,24 +241,29 @@ async function getGroqResponse(userMessage, nomorPengirim) {
         const responseText = response.data.choices[0].message.content;
         const tokensUsed = response.data.usage.total_tokens;
 
-        // Update conversation history
+        // Update conversation history dengan timestamp
         chatHistory.push(
-            { role: 'user', content: userMessage },
-            { role: 'assistant', content: responseText }
+            { role: 'user', content: sanitizedMessage, timestamp: Date.now() },
+            { role: 'assistant', content: responseText, timestamp: Date.now() }
         );
         GROQ_CONFIG.conversationHistory.set(nomorPengirim, chatHistory);
 
         // Increment request count
         GROQ_CONFIG.requestCount++;
 
-        // Save ke database
+        // Save ke database dengan error handling
         db.run(
             'INSERT INTO ai_conversations (nomor_pengirim, user_message, ai_response, model_used, tokens_used) VALUES (?, ?, ?, ?, ?)',
-            [nomorPengirim, userMessage, responseText, GROQ_CONFIG.model, tokensUsed]
+            [nomorPengirim, sanitizedMessage, responseText, GROQ_CONFIG.model, tokensUsed],
+            (err) => {
+                if (err) {
+                    logger.error('❌ Database insert error:', err);
+                }
+            }
         );
 
-        console.log(`✅ Groq response: "${responseText.substring(0, 100)}..."`);
-        console.log(`💰 Tokens used: ${tokensUsed} | Daily count: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit}`);
+        logger.info(`✅ Groq response: "${responseText.substring(0, 100)}..."`);
+        logger.info(`💰 Tokens used: ${tokensUsed} | Daily count: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit}`);
 
         return {
             success: true,
@@ -196,7 +274,7 @@ async function getGroqResponse(userMessage, nomorPengirim) {
         };
 
     } catch (error) {
-        console.error('❌ Groq error:', error.message);
+        logger.error('❌ Groq error:', error.message);
         
         let errorMessage = 'Groq AI sedang bermasalah, coba lagi nanti';
         
@@ -227,7 +305,7 @@ async function getGroqResponse(userMessage, nomorPengirim) {
 // FUNGSI UNTUK CLEAR CONVERSATION HISTORY
 function clearConversationHistory(nomorPengirim) {
     GROQ_CONFIG.conversationHistory.delete(nomorPengirim);
-    console.log(`🧹 Conversation history cleared for ${nomorPengirim}`);
+    logger.info(`🧹 Conversation history cleared for ${nomorPengirim}`);
 }
 
 // FUNGSI UNTUK CHECK APAKAH PESAN BUTUH AI
@@ -236,7 +314,7 @@ function shouldUseAI(message, nomorPengirim) {
     
     // Skip bot's own messages (anti-loop)
     if (pesan.includes('❌ groq error') || pesan.includes('🤖 powered by') || pesan.includes('daily limit tercapai')) {
-        console.log(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
+        logger.info(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
         return false;
     }
     
@@ -251,39 +329,37 @@ function shouldUseAI(message, nomorPengirim) {
     
     for (const cmd of existingCommands) {
         if (pesan.startsWith(cmd) || pesan === cmd.trim()) {
-            console.log(`🚫 Skip command: ${pesan}`);
+            logger.info(`🚫 Skip command: ${pesan}`);
             return false;
         }
     }
     
     // Skip jika pesan kosong atau hanya whitespace
     if (pesan.length === 0) {
-        console.log(`🚫 Skip empty message`);
+        logger.info(`🚫 Skip empty message`);
         return false;
     }
     
     // Skip jika pesan hanya emoji atau karakter khusus (tanpa huruf/angka)
     if (!/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\u1E00-\u1EFF]/.test(pesan)) {
-        console.log(`🚫 Skip special chars only: ${pesan}`);
+        logger.info(`🚫 Skip special chars only: ${pesan}`);
         return false;
     }
     
-    // PERMISSIVE MODE: Allow semua greeting & conversation
-    // Skip HANYA jika single digit atau accident
+    // Skip single digit atau accident
     if (pesan.length === 1 && /^[0-9\.\?\!]$/.test(pesan)) {
-        console.log(`🚫 Skip single char: ${pesan}`);
+        logger.info(`🚫 Skip single char: ${pesan}`);
         return false;
     }
     
     // Skip common accident patterns
     const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm'];
     if (skipPatterns.includes(pesan)) {
-        console.log(`🚫 Skip pattern: ${pesan}`);
+        logger.info(`🚫 Skip pattern: ${pesan}`);
         return false;
     }
     
-    // SEMUA YANG LAIN KIRIM KE AI (termasuk "halo", "hai", greeting, dll)
-    console.log(`✅ Groq akan proses: "${pesan}"`);
+    logger.info(`✅ Groq akan proses: "${pesan}"`);
     return true;
 }
 
@@ -316,32 +392,32 @@ const client = new Client({
 
 // Event ketika QR code siap
 client.on('qr', (qr) => {
-    console.log('📱 Scan QR code berikut dengan WhatsApp:');
+    logger.info('📱 Scan QR code berikut dengan WhatsApp:');
     console.log('');
     qrcode.generate(qr, { small: true });
     console.log('');
-    console.log('⬆️ Scan QR code di atas dengan WhatsApp di HP Anda');
+    logger.info('⬆️ Scan QR code di atas dengan WhatsApp di HP Anda');
 });
 
 // Event ketika client siap
 client.on('ready', () => {
-    console.log('✅ Chatbot dengan Groq AI siap digunakan!');
-    console.log('🤖 Groq integration:', groqClient ? 'ACTIVE' : 'DISABLED');
-    console.log('💰 100% FREE - 6000 requests/day limit');
-    console.log('💡 Kirim pesan apapun untuk berinteraksi dengan Groq AI');
+    logger.info('✅ Chatbot dengan Groq AI siap digunakan!');
+    logger.info('🤖 Groq integration:', groqClient ? 'ACTIVE' : 'DISABLED');
+    logger.info('💰 6000 requests/day limit');
+    logger.info('💡 Kirim pesan apapun untuk berinteraksi dengan Groq AI');
 });
 
 // Event ketika loading
 client.on('loading_screen', (percent, message) => {
-    console.log(`⏳ Loading: ${percent}% - ${message}`);
+    logger.info(`⏳ Loading: ${percent}% - ${message}`);
 });
 
 // Event ketika authenticated
 client.on('authenticated', () => {
-    console.log('🔐 Authenticated berhasil!');
+    logger.info('🔐 Authenticated berhasil!');
 });
 
-// MAIN MESSAGE HANDLER
+// MAIN MESSAGE HANDLER - IMPROVED
 client.on('message_create', async (message) => {
     try {
         // Filter minimal - hanya proses pesan text biasa
@@ -359,18 +435,23 @@ client.on('message_create', async (message) => {
         const messageKey = message.body.trim() + message.from;
         
         if (messageKey === lastProcessedMessage && (currentTime - lastProcessedTime) < 5000) {
-            console.log('🔇 Skip: Duplikasi pesan dalam 5 detik');
+            logger.info('🔇 Skip: Duplikasi pesan dalam 5 detik');
             return;
         }
         
         lastProcessedMessage = messageKey;
         lastProcessedTime = currentTime;
         
-        console.log(`📨 Pesan diterima: "${message.body}" dari ${message.from}`);
+        // Rate limiting check
+        if (isRateLimited(message.from)) {
+            logger.info(`⏰ Rate limited: ${message.from}`);
+            return;
+        }
+        
+        logger.info(`📨 Pesan diterima: "${message.body}" dari ${message.from}`);
         
         const pesan = message.body.toLowerCase().trim();
         const nomorPengirim = message.from;
-        const nomorAnda = '6282213741911@c.us';
         
         const waktuWIB = moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss');
         const tanggalWIB = moment().tz('Asia/Jakarta').format('DD/MM/YYYY');
@@ -421,6 +502,7 @@ client.on('message_create', async (message) => {
                 [catatanFinal, waktuSimpan],
                 function(err) {
                     if (err) {
+                        logger.error('❌ Database error:', err);
                         message.reply('❌ Gagal menyimpan catatan');
                     } else {
                         const statusWaktu = waktuCustom ? '🕐 (waktu manual)' : '🕐 (waktu sekarang)';
@@ -439,6 +521,7 @@ client.on('message_create', async (message) => {
                 [tanggalHariIni],
                 (err, rows) => {
                     if (err) {
+                        logger.error('❌ Database error:', err);
                         message.reply('❌ Gagal mengambil catatan');
                         return;
                     }
@@ -448,7 +531,7 @@ client.on('message_create', async (message) => {
                         return;
                     }
                     
-                    let response = `📋 *Catatan Hari Ini (${tanggalWIB})*\n\n`;
+                    let response = `📋 Catatan Hari Ini (${tanggalWIB})\n\n`;
                     rows.forEach((row, index) => {
                         const jam = moment(row.waktu_wib).format('HH:mm');
                         response += `${index + 1}. [${jam}] ${row.pesan}\n`;
@@ -459,7 +542,7 @@ client.on('message_create', async (message) => {
             );
         }
         
-        // Command untuk reminder dengan waktu spesifik
+        // IMPROVED REMINDER dengan error handling
         else if (pesan.startsWith('reminder ')) {
             const fullReminder = message.body.substring(9).trim();
             
@@ -471,7 +554,6 @@ client.on('message_create', async (message) => {
             let targetTime;
             let reminderText;
             
-            // Simple parsing untuk demo (bisa diperluas)
             const timeOnlyRegex = /^(\d{1,2}):(\d{2})\s+(.+)$/;
             const timeOnlyMatch = fullReminder.match(timeOnlyRegex);
             
@@ -502,10 +584,13 @@ client.on('message_create', async (message) => {
                 
                 message.reply(`⏰ Reminder diset!\n📅 ${tanggalTampil} | ⏰ ${jamTampil}\n📝 "${reminderText}"`);
                 
-                // Set timeout - BUG FIX: Kirim ke nomorPengirim
+                // IMPROVED TIMEOUT dengan error handling
                 setTimeout(() => {
-                    client.sendMessage(nomorPengirim, `🔔 *REMINDER*\n⏰ ${jamTampil} WIB\n📝 ${reminderText}`);
-                    console.log(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminderText}`);
+                    if (client.info && client.info.wid) {
+                        client.sendMessage(nomorPengirim, `🔔 REMINDER\n⏰ ${jamTampil} WIB\n📝 ${reminderText}`)
+                            .then(() => logger.info(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminderText}`))
+                            .catch(err => logger.error(`❌ Gagal kirim reminder: ${err.message}`));
+                    }
                 }, delayMs);
                 
             } else {
@@ -513,7 +598,7 @@ client.on('message_create', async (message) => {
             }
         }
         
-        // Test reminder untuk testing
+        // Test reminder untuk testing - IMPROVED
         else if (pesan.startsWith('test reminder ')) {
             const reminder = message.body.substring(14).trim();
             
@@ -523,12 +608,15 @@ client.on('message_create', async (message) => {
             }
             
             message.reply(`⏰ Test reminder diset: "${reminder}"\n🕐 Akan mengingatkan dalam 5 menit`);
-            console.log(`⏰ Test reminder diset: ${reminder} oleh ${nomorPengirim}`);
+            logger.info(`⏰ Test reminder diset: ${reminder} oleh ${nomorPengirim}`);
             
-            // Set timeout untuk 5 menit - BUG FIX: Kirim ke nomorPengirim
+            // IMPROVED TIMEOUT dengan error handling
             setTimeout(() => {
-                client.sendMessage(nomorPengirim, `🔔 *TEST REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
-                console.log(`🔔 Test reminder terkirim ke ${nomorPengirim}: ${reminder}`);
+                if (client.info && client.info.wid) {
+                    client.sendMessage(nomorPengirim, `🔔 TEST REMINDER\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB`)
+                        .then(() => logger.info(`🔔 Test reminder terkirim ke ${nomorPengirim}: ${reminder}`))
+                        .catch(err => logger.error(`❌ Gagal kirim test reminder: ${err.message}`));
+                }
             }, 300000);
         }
         
@@ -554,16 +642,22 @@ client.on('message_create', async (message) => {
                 'SELECT COUNT(*) as total, SUM(tokens_used) as total_tokens FROM ai_conversations WHERE nomor_pengirim = ?',
                 [nomorPengirim],
                 (err, stats) => {
+                    if (err) {
+                        logger.error('❌ Database error:', err);
+                        message.reply('❌ Error mengambil statistik');
+                        return;
+                    }
+                    
                     const totalChats = stats ? stats.total : 0;
                     const totalTokens = stats ? stats.total_tokens : 0;
                     
-                    message.reply(`🤖 *Groq AI Status - 100% FREE*\n\n🔌 API: ${aiStatus}\n📊 Model: ${GROQ_CONFIG.model}\n💬 Active conversations: ${activeConversations}\n📈 Your chats: ${totalChats}\n🎯 Your tokens: ${totalTokens}\n⚙️ Temperature: ${GROQ_CONFIG.temperature}\n\n📊 *Daily Usage:*\n🚀 Requests today: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit}\n💰 Remaining: ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount}\n🔄 Reset: Tomorrow\n\n💡 Gunakan "clear ai" untuk reset percakapan`);
+                    message.reply(`🤖 *Groq AI Status - FREE TIER*\n\n🔌 API: ${aiStatus}\n📊 Model: ${GROQ_CONFIG.model}\n💬 Active conversations: ${activeConversations}\n📈 Your chats: ${totalChats}\n🎯 Your tokens: ${totalTokens}\n⚙️ Temperature: ${GROQ_CONFIG.temperature}\n\n📊 *Daily Usage:*\n🚀 Requests today: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit}\n💰 Remaining: ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount}\n🔄 Reset: Tomorrow\n\n💡 Gunakan "clear ai" untuk reset percakapan`);
                 }
             );
         }
         
         else if (pesan.startsWith('setup groq') || pesan === 'config groq') {
-            const setupGuide = `🔧 *SETUP GROQ AI - 100% FREE*
+            const setupGuide = `🔧 *SETUP GROQ AI - FREE TIER*
 
 📝 **STEP 1: Dapatkan API Key GRATIS**
 1. Buka: https://console.groq.com
@@ -572,15 +666,17 @@ client.on('message_create', async (message) => {
 4. Click "Create API Key"
 5. Copy API key yang dihasilkan (gsk-...)
 
-📝 **STEP 2: Update Config**
-Edit app.js:
-\`\`\`javascript
-apiKey: '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',
+📝 **STEP 2: Setup Environment**
+1. Buat file .env di root folder:
+\`\`\`
+GROQ_API_KEY=gsk_your_api_key_here
+PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+PORT=3000
 \`\`\`
 
-📝 **STEP 3: Install Package**
+📝 **STEP 3: Install Dependencies**
 \`\`\`bash
-npm install axios
+npm install dotenv winston
 \`\`\`
 
 📝 **STEP 4: Restart Bot**
@@ -588,39 +684,33 @@ npm install axios
 pm2 restart whatsapp-bot
 \`\`\`
 
-💰 **GROQ FREE TIER - PALING GENEROUS:**
+💰 **GROQ FREE TIER:**
 ✅ 6,000 requests per day - 100% GRATIS
-✅ Super fast inference (fastest in the world!)
-✅ No credit card required EVER
-✅ Llama 3.1 70B model - very smart
-✅ No billing setup headache
-✅ Unlimited usage within daily limit
+✅ Super fast inference
+✅ No credit card required
+✅ Llama 3.1 70B model
+✅ No billing setup
+✅ Secure API key handling
 
 🧪 **Test Commands:**
-• groq status - Check Groq status & daily usage
+• groq status - Check status & usage
 • clear ai - Reset conversation
-• [tanya apapun] - Groq akan jawab super cepat!
+• [tanya apapun] - Groq response
 
-🌟 **Keunggulan Groq:**
-• 100% gratis selamanya (no payment ever!)
-• Super cepat - fastest AI inference
-• Smart Llama models available free
-• Simple setup, no billing nightmare
-• 6000 requests/day = very generous
-• Perfect untuk personal use & development
-
-🚀 **Models Available FREE:**
-• llama-3.1-70b-versatile (terpintar)
-• llama-3.1-8b-instant (tercepat)  
-• mixtral-8x7b-32768 (balanced)`;
+🔐 **Security Features:**
+• API key dari environment variable
+• Input sanitization
+• Rate limiting
+• Error logging
+• Memory management`;
             
             message.reply(setupGuide);
         }
         
-        // BANTUAN COMMAND - UPDATED dengan Groq features
+        // BANTUAN COMMAND - UPDATED
         else if (pesan === 'bantuan' || pesan === 'help') {
             const aiStatusEmoji = groqClient ? '🤖✅' : '🤖❌';
-            const helpText = `🤖 *Chatbot Universal dengan Groq AI - 100% FREE* ${aiStatusEmoji}
+            const helpText = `🤖 *Chatbot Universal dengan Groq AI - SECURE VERSION* ${aiStatusEmoji}
 
 📝 *Perintah Catatan & Reminder:*
 • *catat [pesan]* - Simpan catatan
@@ -629,53 +719,30 @@ pm2 restart whatsapp-bot
 • *test reminder [pesan]* - Test reminder 5 menit
 • *hari ini* - Lihat catatan hari ini
 
-🤖 *Groq AI Features - 100% GRATIS:*
-• *[tanya apapun]* - Groq AI jawab super cepat
-• *groq status* - Status & daily usage tracker
-• *clear ai* - Reset conversation history
-• *setup groq* - Panduan setup API
+🤖 *Groq AI Features - SECURE:*
+• *[tanya apapun]* - Groq AI response
+• *groq status* - Status & usage tracker
+• *clear ai* - Reset conversation
+• *setup groq* - Setup guide
 
 📋 *Lainnya:*
 • *status* - Status bot
 • *bantuan* - Menu ini
 
-💡 *Cara Pakai Groq AI:*
-• Tanya apapun dalam bahasa natural
-• Groq ingat konteks percakapan
-• Super fast response - fastest AI in the world!
-• Support bahasa Indonesia excellent
-• 6000 requests/day = very generous!
-• 100% GRATIS SELAMANYA!
+🔐 *Security Features:*
+✅ API key dari environment variable
+✅ Rate limiting (2s cooldown)
+✅ Input sanitization
+✅ Memory cleanup
+✅ Error logging
+✅ Anti-loop protection
 
 🔧 *Setup Status:*
-${groqClient ? '✅ Groq AI sudah aktif!' : '❌ Butuh Groq API key (setup groq)'}
+${groqClient ? '✅ Groq AI aktif dan secure!' : '❌ Butuh setup environment (.env file)'}
 
-🌟 *Contoh Pertanyaan Groq:*
-• "Halo, bagaimana cara belajar programming?"
-• "Jelaskan tentang AI dan machine learning"
-• "Buatkan rencana belajar untuk mahasiswa IT"
-• "Tips meningkatkan produktivitas kerja"
-• "Analisis tren teknologi 2025"
-• "Bantuin coding website sederhana"
-
-✨ *Keunggulan Groq vs Lainnya:*
-• 100% GRATIS tanpa hidden cost
-• Fastest AI inference di dunia
-• 6000 requests/day (sangat generous!)
-• No credit card, no billing setup
-• Smart Llama 3.1 models
-• Simple API, reliable performance
-
-💰 *Cost Comparison:*
-• Groq: 100% FREE forever
-• ChatGPT: $20/month + usage costs
-• Gemini: Complex billing + quotas
-• Claude: Limited free tier
-
-🚀 *Daily Usage Status:*
+💰 *Daily Usage:*
 • Requests today: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit}
-• Remaining: ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount}
-• Reset: Tomorrow morning`;
+• Remaining: ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount}`;
             
             message.reply(helpText);
         }
@@ -686,60 +753,72 @@ ${groqClient ? '✅ Groq AI sudah aktif!' : '❌ Butuh Groq API key (setup groq)
             const aiStatus = groqClient ? '✅ ACTIVE' : '❌ DISABLED';
             const conversationCount = GROQ_CONFIG.conversationHistory.size;
             
-            message.reply(`✅ *Chatbot Status*\n⏰ ${waktu} WIB\n🤖 Groq AI: ${aiStatus}\n💬 Active conversations: ${conversationCount}\n👤 Anda: ${nomorPengirim}\n\n💡 Bot siap menerima pertanyaan Groq AI!\n💰 100% GRATIS - ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount} requests remaining today!`);
+            message.reply(`✅ *Chatbot Status - SECURE VERSION*\n⏰ ${waktu} WIB\n🤖 Groq AI: ${aiStatus}\n💬 Active conversations: ${conversationCount}\n👤 Anda: ${nomorPengirim}\n🔐 Security: ENHANCED\n\n💡 Bot siap dengan keamanan tinggi!\n💰 ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount} requests remaining today!`);
         }
         
-        // DEFAULT: GROQ AI RESPONSE
+        // DEFAULT: GROQ AI RESPONSE - IMPROVED
         else {
             // Check apakah pesan butuh AI response
             if (shouldUseAI(message.body, nomorPengirim)) {
                 if (!groqClient) {
-                    message.reply('🤖 Groq AI belum dikonfigurasi.\n\n💡 Kirim "setup groq" untuk panduan setup, atau "bantuan" untuk melihat perintah lain.\n\n✨ Groq 100% GRATIS dengan 6000 requests/day!');
+                    message.reply('🤖 Groq AI belum dikonfigurasi.\n\n💡 Kirim "setup groq" untuk panduan setup, atau "bantuan" untuk melihat perintah lain.\n\n🔐 Setup secure dengan environment variables!');
                     return;
                 }
                 
                 // Show processing indicator
-                console.log(`🤖 Processing Groq request: "${message.body}"`);
+                logger.info(`🤖 Processing Groq request: "${message.body.substring(0, 50)}..."`);
                 
                 // Get Groq response
                 const aiResult = await getGroqResponse(message.body, nomorPengirim);
                 
                 if (aiResult.success) {
-                    // Send AI response dengan emoji dan branding
-                    message.reply(`✨ ${aiResult.response}\n\n🤖 _Powered by Groq AI - 100% FREE_`);
-                    console.log(`✅ Groq response sent to ${nomorPengirim} (${aiResult.tokensUsed} tokens, daily: ${aiResult.dailyCount}/${GROQ_CONFIG.dailyLimit})`);
+                    // Send AI response dengan branding
+                    message.reply(`✨ ${aiResult.response}\n\n🤖 *Powered by Groq AI - Secure & Fast*`);
+                    logger.info(`✅ Groq response sent to ${nomorPengirim} (${aiResult.tokensUsed} tokens, daily: ${aiResult.dailyCount}/${GROQ_CONFIG.dailyLimit})`);
                 } else {
                     // Send error message
                     message.reply(`❌ Groq Error: ${aiResult.error}\n\n💡 Coba lagi nanti atau kirim "bantuan" untuk perintah lain.\n\n🔧 Jika terus error, coba "clear ai" untuk reset conversation.`);
-                    console.log(`❌ Groq error for ${nomorPengirim}: ${aiResult.error}`);
+                    logger.error(`❌ Groq error for ${nomorPengirim}: ${aiResult.error}`);
                 }
             } else {
-                // Pesan terlalu pendek atau tidak jelas, tidak perlu AI response
-                console.log(`❓ Pesan tidak dikenali dari ${nomorPengirim}: ${message.body}`);
+                // Pesan tidak memerlukan response
+                logger.info(`❓ Pesan diabaikan dari ${nomorPengirim}: ${message.body.substring(0, 50)}...`);
             }
         }
         
     } catch (error) {
-        console.log('❌ Error dalam message handler:', error);
+        logger.error('❌ Error dalam message handler:', error);
+        // Jangan reply error ke user untuk menghindari spam
     }
 });
 
 // Handle error events
 client.on('auth_failure', msg => {
-    console.log('❌ Authentikasi gagal:', msg);
+    logger.error('❌ Authentikasi gagal:', msg);
 });
 
 client.on('disconnected', (reason) => {
-    console.log('📱 Client terputus:', reason);
+    logger.warn('📱 Client terputus:', reason);
 });
 
 // Jalankan client
-console.log('🔄 Menginisialisasi WhatsApp client...');
+logger.info('🔄 Menginisialisasi WhatsApp client...');
 client.initialize();
 
-// Setup web server untuk monitoring
+// Setup web server untuk monitoring - IMPROVED
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        groq: groqClient ? 'connected' : 'disconnected',
+        whatsapp: client.info ? 'connected' : 'disconnected',
+        version: 'secure-v2.0'
+    });
+});
 
 app.get('/', (req, res) => {
     const waktu = moment().tz('Asia/Jakarta').format('DD/MM/YYYY HH:mm:ss');
@@ -754,148 +833,96 @@ app.get('/', (req, res) => {
     }
     
     res.send(`
-        <h1>🤖✨ Chatbot WhatsApp dengan Groq AI - 100% FREE FOREVER</h1>
-        <p>⏰ Waktu: ${waktu} WIB</p>
-        <p>📱 Status: Aktif</p>
-        <p>🤖 Groq AI: ${aiStatus}</p>
-        <p>📊 Model: ${GROQ_CONFIG.model}</p>
-        <p>💬 Active Conversations: ${conversationCount}</p>
+        <h1>🤖✨ Chatbot WhatsApp dengan Groq AI - SECURE VERSION</h1>
         
-        <h2>💰 Daily Usage Status:</h2>
-        <div style="background: #dcfce7; padding: 15px; margin: 10px 0; border-radius: 8px;">
-            <p><strong>📊 Today's Usage:</strong></p>
-            <ul>
-                <li><strong>Requests made:</strong> ${GROQ_CONFIG.requestCount}</li>
-                <li><strong>Daily limit:</strong> ${GROQ_CONFIG.dailyLimit}</li>
-                <li><strong>Remaining:</strong> ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount}</li>
-                <li><strong>Reset:</strong> Tomorrow morning</li>
-            </ul>
-        </div>
+        <h2>📊 Status Dashboard</h2>
+        <p><strong>⏰ Waktu:</strong> ${waktu} WIB</p>
+        <p><strong>📱 WhatsApp:</strong> ${client.info ? '✅ Connected' : '❌ Disconnected'}</p>
+        <p><strong>🤖 Groq AI:</strong> ${aiStatus}</p>
+        <p><strong>📊 Model:</strong> ${GROQ_CONFIG.model}</p>
+        <p><strong>💬 Active Conversations:</strong> ${conversationCount}</p>
         
-        <h2>✨ Groq AI Features - 100% FREE:</h2>
+        <h2>🔐 Security Features</h2>
         <ul>
-            <li><strong>COMPLETELY FREE</strong> - No payment ever required!</li>
-            <li><strong>Super Fast</strong> - Fastest AI inference in the world</li>
-            <li><strong>Generous Limits</strong> - 6000 requests per day</li>
-            <li><strong>Smart Models</strong> - Llama 3.1 70B available free</li>
-            <li><strong>No Billing Setup</strong> - Unlike ChatGPT/Gemini!</li>
-            <li><strong>Excellent Indonesian</strong> - Natural conversation</li>
+            <li>✅ API key secured in environment variables</li>
+            <li>✅ Rate limiting (2s cooldown per user)</li>
+            <li>✅ Input sanitization (max 2000 chars)</li>
+            <li>✅ Memory cleanup (24h auto-cleanup)</li>
+            <li>✅ Comprehensive error logging</li>
+            <li>✅ Anti-loop protection</li>
+            <li>✅ Database error handling</li>
         </ul>
         
-        <h2>📝 Commands:</h2>
+        <h2>📊 Daily Usage Status</h2>
         <ul>
-            <li><strong>[tanya apapun]</strong> - Groq AI response super cepat</li>
-            <li><strong>groq status</strong> - Check status & daily usage</li>
-            <li><strong>clear ai</strong> - Reset conversation history</li>
-            <li><strong>setup groq</strong> - Setup guide API key</li>
-            <li><strong>catat [pesan]</strong> - Save notes</li>
-            <li><strong>reminder HH:MM [pesan]</strong> - Set reminders</li>
-            <li><strong>bantuan</strong> - Full help menu</li>
+            <li><strong>Requests made:</strong> ${GROQ_CONFIG.requestCount}</li>
+            <li><strong>Daily limit:</strong> ${GROQ_CONFIG.dailyLimit}</li>
+            <li><strong>Remaining:</strong> ${GROQ_CONFIG.dailyLimit - GROQ_CONFIG.requestCount}</li>
+            <li><strong>Reset:</strong> Tomorrow morning</li>
         </ul>
         
-        <h2>🌟 Example Groq Conversations:</h2>
-        <div style="background: #f0f9ff; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #0ea5e9;">
-            <p><strong>User:</strong> "Halo, apa kabar?"</p>
-            <p><strong>Groq:</strong> "✨ Halo! Saya baik-baik saja, terima kasih! 😊 Saya Groq Assistant yang super cepat..."</p>
-        </div>
-        
-        <div style="background: #f0fdf4; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #22c55e;">
-            <p><strong>User:</strong> "Jelaskan tentang machine learning"</p>
-            <p><strong>Groq:</strong> "✨ Machine Learning adalah subset dari AI yang memungkinkan komputer belajar..."</p>
-        </div>
-        
-        <div style="background: #fefce8; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #eab308;">
-            <p><strong>User:</strong> "Buatkan code calculator JavaScript"</p>
-            <p><strong>Groq:</strong> "✨ Tentu! Berikut calculator JavaScript yang simple dan fungsional..."</p>
-        </div>
-        
-        <h2>⚙️ Technical Specs:</h2>
+        <h2>✨ Groq AI Features - SECURE</h2>
         <ul>
-            <li>Model: ${GROQ_CONFIG.model}</li>
-            <li>Max Tokens: ${GROQ_CONFIG.maxTokens}</li>
-            <li>Temperature: ${GROQ_CONFIG.temperature}</li>
-            <li>Memory: Conversation history per user (last 8 messages)</li>
-            <li>API: Groq Platform</li>
-            <li>Daily Limit: ${GROQ_CONFIG.dailyLimit} requests</li>
-            <li>Language: Indonesian + English optimized</li>
+            <li>🔐 Secure API key handling</li>
+            <li>⚡ Super fast inference</li>
+            <li>🎯 Smart conversation context</li>
+            <li>🧹 Automatic memory management</li>
+            <li>📊 Usage tracking & limits</li>
+            <li>🛡️ Input validation & sanitization</li>
         </ul>
         
-        <h2>💰 Cost: 100% FREE FOREVER!</h2>
-        <div style="background: #dcfce7; padding: 15px; margin: 10px 0; border-radius: 8px;">
-            <p><strong>✅ GROQ FREE TIER:</strong></p>
-            <ul>
-                <li><strong>6,000 requests per day</strong> - very generous!</li>
-                <li><strong>Fastest AI inference</strong> in the world</li>
-                <li><strong>No credit card</strong> required ever</li>
-                <li><strong>No billing setup</strong> nightmare</li>
-                <li><strong>Smart Llama 3.1 models</strong> available</li>
-                <li><strong>Perfect for personal</strong> and development use</li>
-            </ul>
-        </div>
+        <h2>🚀 Version Info</h2>
+        <p><strong>Version:</strong> Secure v2.0</p>
+        <p><strong>Security Level:</strong> Enhanced</p>
+        <p><strong>API Protection:</strong> Environment-based</p>
+        <p><strong>Rate Limiting:</strong> Active</p>
         
-        <h2>🆚 Groq vs Competitors:</h2>
-        <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-            <tr style="background: #f8fafc;">
-                <th style="border: 1px solid #e2e8f0; padding: 10px;">Feature</th>
-                <th style="border: 1px solid #e2e8f0; padding: 10px;">Groq</th>
-                <th style="border: 1px solid #e2e8f0; padding: 10px;">ChatGPT</th>
-                <th style="border: 1px solid #e2e8f0; padding: 10px;">Gemini</th>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #e2e8f0; padding: 10px;">Cost</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ 100% FREE</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: red;">❌ $20/month</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Complex billing</td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #e2e8f0; padding: 10px;">Setup</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Super Easy</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Credit card needed</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: red;">❌ Billing nightmare</td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #e2e8f0; padding: 10px;">Speed</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ FASTEST</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Good</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Good</td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #e2e8f0; padding: 10px;">Daily Limit</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ 6000 requests</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: orange;">⚠️ Rate limited</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: red;">❌ Complex quotas</td>
-            </tr>
-            <tr>
-                <td style="border: 1px solid #e2e8f0; padding: 10px;">Indonesian</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Excellent</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Excellent</td>
-                <td style="border: 1px solid #e2e8f0; padding: 10px; color: green;">✅ Excellent</td>
-            </tr>
-        </table>
-        
-        <h2>🚀 Getting Started:</h2>
-        <div style="background: #dbeafe; padding: 15px; margin: 10px 0; border-radius: 8px;">
-            <p><strong>Switch to Groq in 2 minutes:</strong></p>
-            <ol>
-                <li>Get free API key from console.groq.com</li>
-                <li>Update your config with the key</li>
-                <li>Enjoy super fast AI for FREE forever!</li>
-            </ol>
-            <p><strong>No credit card, no billing, no headaches!</strong></p>
-        </div>
+        <footer>
+            <p>💰 <strong>100% FREE</strong> - Powered by Groq AI</p>
+            <p>🔐 Secure, Fast, and Reliable</p>
+        </footer>
     `);
 });
 
 app.listen(PORT, () => {
-    console.log(`🌐 Web server berjalan di http://localhost:${PORT}`);
-    console.log(`🤖 Groq integration: ${groqClient ? 'READY' : 'NEED SETUP'}`);
-    console.log(`💰 Daily usage: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit} requests`);
+    logger.info(`🌐 Web server berjalan di http://localhost:${PORT}`);
+    logger.info(`🤖 Groq integration: ${groqClient ? 'READY' : 'NEED SETUP'}`);
+    logger.info(`🔐 Security: ENHANCED`);
+    logger.info(`💰 Daily usage: ${GROQ_CONFIG.requestCount}/${GROQ_CONFIG.dailyLimit} requests`);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-    console.log('\n🛑 Menutup chatbot...');
-    client.destroy();
-    db.close();
-    process.exit();
+// Graceful shutdown - IMPROVED
+process.on('SIGINT', async () => {
+    logger.info('\n🛑 Menutup chatbot...');
+    try {
+        if (client) {
+            await client.destroy();
+            logger.info('📱 WhatsApp client closed');
+        }
+        
+        if (db) {
+            db.close((err) => {
+                if (err) {
+                    logger.error('❌ Error closing database:', err);
+                } else {
+                    logger.info('📁 Database closed');
+                }
+                process.exit(0);
+            });
+        } else {
+            process.exit(0);
+        }
+    } catch (error) {
+        logger.error('❌ Error during shutdown:', error);
+        process.exit(1);
+    }
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    logger.error('❌ Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
 });
