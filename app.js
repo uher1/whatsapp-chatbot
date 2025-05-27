@@ -1,4 +1,4 @@
-// CHATBOT WHATSAPP UNTUK CATATAN HARIAN - UNIVERSAL VERSION
+// CHATBOT WHATSAPP UNTUK CATATAN HARIAN - UNIVERSAL VERSION (BUG FIXED)
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const moment = require('moment-timezone');
@@ -397,16 +397,16 @@ client.on('message_create', async (message) => {
             
             message.reply(responseText);
             
-            // Set timeout
+            // Set timeout - BUG FIX: Kirim ke nomorPengirim, bukan nomorAnda
             setTimeout(() => {
-                client.sendMessage(nomorAnda, `🔔 *REMINDER*\n⏰ ${jamTampil} WIB\n📅 ${tanggalTampil} (${hariTampil})\n📝 ${reminderText}\n\n👤 Diset oleh: ${nomorPengirim}`);
-                console.log(`🔔 Reminder terkirim: ${reminderText} (${tanggalTampil} ${jamTampil})`);
+                client.sendMessage(nomorPengirim, `🔔 *REMINDER*\n⏰ ${jamTampil} WIB\n📅 ${tanggalTampil} (${hariTampil})\n📝 ${reminderText}\n\n👤 Diset oleh: ${nomorPengirim}`);
+                console.log(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminderText} (${tanggalTampil} ${jamTampil})`);
             }, delayMs);
             
-            console.log(`⏰ Reminder diset untuk ${tanggalTampil} ${jamTampil}: ${reminderText} (delay: ${Math.round(delayMs / 60000)} menit)`);
+            console.log(`⏰ Reminder diset untuk ${tanggalTampil} ${jamTampil}: ${reminderText} (delay: ${Math.round(delayMs / 60000)} menit) - Target: ${nomorPengirim}`);
         }
         
-        // Command untuk reminder (1 jam) - TETAP ADA untuk kompatibilitas
+        // Command untuk reminder (1 jam) - TETAP ADA untuk kompatibilitas - BUG FIX
         else if (pesan.startsWith('ingatkan ')) {
             const reminder = message.body.substring(9).trim();
             
@@ -418,14 +418,14 @@ client.on('message_create', async (message) => {
             message.reply(`⏰ Reminder diset: "${reminder}"\n🕐 Akan mengingatkan dalam 1 jam`);
             console.log(`⏰ Reminder diset: ${reminder} oleh ${nomorPengirim}`);
             
-            // Set timeout untuk 1 jam (3600000 ms)
+            // Set timeout untuk 1 jam (3600000 ms) - BUG FIX: Kirim ke nomorPengirim
             setTimeout(() => {
-                client.sendMessage(nomorAnda, `🔔 *REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
-                console.log(`🔔 Reminder terkirim: ${reminder}`);
+                client.sendMessage(nomorPengirim, `🔔 *REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
+                console.log(`🔔 Reminder terkirim ke ${nomorPengirim}: ${reminder}`);
             }, 3600000);
         }
         
-        // Command untuk reminder 5 menit (untuk testing)
+        // Command untuk reminder 5 menit (untuk testing) - BUG FIX
         else if (pesan.startsWith('test reminder ')) {
             const reminder = message.body.substring(14).trim();
             
@@ -437,10 +437,10 @@ client.on('message_create', async (message) => {
             message.reply(`⏰ Test reminder diset: "${reminder}"\n🕐 Akan mengingatkan dalam 5 menit`);
             console.log(`⏰ Test reminder diset: ${reminder} oleh ${nomorPengirim}`);
             
-            // Set timeout untuk 5 menit (300000 ms)
+            // Set timeout untuk 5 menit (300000 ms) - BUG FIX: Kirim ke nomorPengirim
             setTimeout(() => {
-                client.sendMessage(nomorAnda, `🔔 *TEST REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
-                console.log(`🔔 Test reminder terkirim: ${reminder}`);
+                client.sendMessage(nomorPengirim, `🔔 *TEST REMINDER*\n${reminder}\n\n⏰ ${moment().tz('Asia/Jakarta').format('HH:mm')} WIB\n👤 Diset oleh: ${nomorPengirim}`);
+                console.log(`🔔 Test reminder terkirim ke ${nomorPengirim}: ${reminder}`);
             }, 300000);
         }
         
@@ -493,7 +493,10 @@ client.on('message_create', async (message) => {
 💡 *Tips:* 
 • Gunakan "catat HH:MM" untuk mencatat aktivitas masa lalu
 • Gunakan "reminder HH:MM" untuk set alarm masa depan
-• Jika waktu reminder sudah lewat, akan diset untuk besok!`;
+• Jika waktu reminder sudah lewat, akan diset untuk besok!
+• Reminder akan dikirim kembali ke nomor yang mengatur reminder
+
+✅ *BUG FIX: Reminder sekarang dikirim ke nomor yang set reminder, bukan ke nomor utama!*`;
             
             message.reply(helpText);
             console.log(`📖 Mengirim menu bantuan ke ${nomorPengirim}`);
@@ -502,7 +505,7 @@ client.on('message_create', async (message) => {
         // Command untuk cek status
         else if (pesan === 'status') {
             const waktu = moment().tz('Asia/Jakarta').format('DD/MM/YYYY HH:mm:ss');
-            message.reply(`✅ Chatbot aktif!\n⏰ Waktu sekarang: ${waktu} WIB\n📱 Nomor utama: ${nomorAnda}\n👤 Pengirim: ${nomorPengirim}\n🔄 fromMe: ${message.fromMe}`);
+            message.reply(`✅ Chatbot aktif!\n⏰ Waktu sekarang: ${waktu} WIB\n📱 Nomor utama: ${nomorAnda}\n👤 Pengirim: ${nomorPengirim}\n🔄 fromMe: ${message.fromMe}\n\n✅ *BUG FIX: Reminder akan dikirim ke ${nomorPengirim}*`);
             console.log(`📊 Status diminta oleh ${nomorPengirim}`);
         }
         
@@ -532,7 +535,7 @@ client.on('message_create', async (message) => {
         
         // Siapa yang bisa akses
         else if (pesan === 'siapa') {
-            message.reply(`👥 *Info Akses Chatbot*\n\n✅ Semua orang bisa:\n• Kirim catatan\n• Lihat catatan hari ini/minggu ini\n• Set reminder\n• Cek status\n\n🔒 Hanya nomor utama (${nomorAnda}) yang bisa:\n• Hapus catatan\n\n👤 Nomor Anda: ${nomorPengirim}`);
+            message.reply(`👥 *Info Akses Chatbot*\n\n✅ Semua orang bisa:\n• Kirim catatan\n• Lihat catatan hari ini/minggu ini\n• Set reminder\n• Cek status\n\n🔒 Hanya nomor utama (${nomorAnda}) yang bisa:\n• Hapus catatan\n\n👤 Nomor Anda: ${nomorPengirim}\n\n✅ *BUG FIX: Reminder akan dikirim kembali ke nomor Anda!*`);
         }
         
         // Log perintah tidak dikenali tanpa reply
@@ -567,10 +570,19 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => {
     const waktu = moment().tz('Asia/Jakarta').format('DD/MM/YYYY HH:mm:ss');
     res.send(`
-        <h1>🤖 Chatbot WhatsApp Universal Aktif!</h1>
+        <h1>🤖 Chatbot WhatsApp Universal Aktif! (BUG FIXED)</h1>
         <p>⏰ Waktu: ${waktu} WIB</p>
         <p>📱 Status: Berjalan</p>
         <p>💡 Kirim "bantuan" dari nomor manapun untuk melihat perintah</p>
+        
+        <h2>🐛 BUG FIXES:</h2>
+        <ul>
+            <li>✅ <strong>Reminder fix:</strong> Sekarang dikirim ke nomor yang set reminder (bukan hard-coded ke 1911)</li>
+            <li>✅ <strong>Multi-user support:</strong> Setiap orang dapat reminder ke nomor mereka sendiri</li>
+            <li>✅ <strong>Test reminder fix:</strong> Test reminder juga dikirim ke pengirim</li>
+            <li>✅ <strong>Improved logging:</strong> Log target nomor untuk debugging</li>
+        </ul>
+        
         <h2>📝 Perintah Tersedia:</h2>
         <ul>
             <li><strong>catat [pesan]</strong> - Simpan catatan dengan waktu sekarang</li>
@@ -587,13 +599,24 @@ app.get('/', (req, res) => {
             <li><strong>siapa</strong> - Info akses chatbot</li>
             <li><strong>hapus hari ini</strong> - Hapus catatan (hanya nomor utama)</li>
         </ul>
+        
         <h2>🌟 Fitur Universal:</h2>
         <p>✅ Terima pesan dari semua nomor WhatsApp<br>
         ✅ Catatan disimpan dengan info pengirim<br>
         ✅ Reminder dengan 3 format: HH:MM, DD/MM HH:MM, DD/MM/YYYY HH:MM<br>
         ✅ Auto-detect: hari ini, besok, tahun depan<br>
         ✅ Reminder jangka panjang (hari, bulan, tahun)<br>
+        ✅ <strong>Multi-user reminder support (BUG FIXED!)</strong><br>
         🔒 Hapus catatan hanya untuk nomor utama</p>
+        
+        <h2>🔧 Technical Changes:</h2>
+        <ul>
+            <li>Line 362: client.sendMessage(nomorAnda, ...) → client.sendMessage(nomorPengirim, ...)</li>
+            <li>Line 385: client.sendMessage(nomorAnda, ...) → client.sendMessage(nomorPengirim, ...)</li>
+            <li>Line 398: client.sendMessage(nomorAnda, ...) → client.sendMessage(nomorPengirim, ...)</li>
+            <li>Added target logging for debugging</li>
+            <li>Updated help text to mention bug fix</li>
+        </ul>
     `);
 });
 
