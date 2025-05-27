@@ -312,13 +312,33 @@ function clearConversationHistory(nomorPengirim) {
 function shouldUseAI(message, nomorPengirim) {
     const pesan = message.toLowerCase().trim();
     
-    // Skip bot's own messages (anti-loop)
-    if (pesan.includes('❌ groq error') || pesan.includes('🤖 powered by') || pesan.includes('daily limit tercapai')) {
-        logger.info(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
+    // ENHANCED Anti-loop protection
+    const botSignatures = [
+        '🤖 powered by groq ai',
+        'powered by groq ai',
+        'groq ai - secure',
+        '✨ ',  // Bot responses biasanya dimulai dengan sparkle
+        'terima kasih!',
+        'wah, terima kasih',
+        'untuk menghitung',
+        'jadi, hasilnya adalah'
+    ];
+    
+    // Skip bot's own messages
+    for (const signature of botSignatures) {
+        if (pesan.includes(signature)) {
+            logger.info(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
+            return false;
+        }
+    }
+    
+    // Skip jika pesan dari nomor bot sendiri (tambahan protection)
+    if (pesan.includes('❌ groq error') || pesan.includes('daily limit tercapai')) {
+        logger.info(`🚫 Skip error message: ${pesan.substring(0, 50)}...`);
         return false;
     }
     
-    // Skip jika pesan adalah command existing
+    // Skip commands
     const existingCommands = [
         'catat ', 'reminder ', 'ingatkan ', 'test reminder ',
         'hari ini', 'minggu ini', 'bantuan', 'help', 'status',
@@ -334,26 +354,20 @@ function shouldUseAI(message, nomorPengirim) {
         }
     }
     
-    // Skip jika pesan kosong atau hanya whitespace
-    if (pesan.length === 0) {
-        logger.info(`🚫 Skip empty message`);
+    // Skip jika pesan kosong atau terlalu pendek
+    if (pesan.length === 0 || pesan.length < 2) {
+        logger.info(`🚫 Skip empty/short message`);
         return false;
     }
     
-    // Skip jika pesan hanya emoji atau karakter khusus (tanpa huruf/angka)
+    // Skip emoji-only messages
     if (!/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\u1E00-\u1EFF]/.test(pesan)) {
         logger.info(`🚫 Skip special chars only: ${pesan}`);
         return false;
     }
     
-    // Skip single digit atau accident
-    if (pesan.length === 1 && /^[0-9\.\?\!]$/.test(pesan)) {
-        logger.info(`🚫 Skip single char: ${pesan}`);
-        return false;
-    }
-    
     // Skip common accident patterns
-    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm'];
+    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm', 'ok', 'oke'];
     if (skipPatterns.includes(pesan)) {
         logger.info(`🚫 Skip pattern: ${pesan}`);
         return false;
