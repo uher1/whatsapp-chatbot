@@ -324,13 +324,53 @@ function clearConversationHistory(nomorPengirim) {
 function shouldUseAI(message, nomorPengirim) {
     const pesan = message.toLowerCase().trim();
     
-    // Skip bot's own messages (anti-loop)
-    if (pesan.includes('❌ groq error') || pesan.includes('🤖 powered by') || pesan.includes('daily limit tercapai')) {
-        logger.info(`🚫 Skip bot's own message: ${pesan.substring(0, 50)}...`);
+    // SUPER STRICT Anti-loop protection
+    const botSignatures = [
+        '🤖 powered by groq ai',
+        'powered by groq ai',
+        'groq ai - secure',
+        '✨ selamat datang',
+        '✨ saya senang',
+        'selamat datang! saya senang',
+        'saya senang membantu anda',
+        'vba advanced development',
+        'smartthesis vba pro',
+        'word api',
+        'office automation',
+        'apakah anda memiliki pertanyaan',
+        'silakan bertanya',
+        'saya akan menyediakan',
+        'maaf, saya khusus membantu'
+    ];
+    
+    // Skip bot's own messages - VERY STRICT
+    for (const signature of botSignatures) {
+        if (pesan.includes(signature)) {
+            logger.info(`🚫 Skip bot's own message: ${signature}`);
+            return false;
+        }
+    }
+    
+    // Additional protection - Skip long messages (likely bot responses)
+    if (pesan.length > 200) {
+        logger.info(`🚫 Skip long message (${pesan.length} chars): ${pesan.substring(0, 50)}...`);
         return false;
     }
     
-    // Skip jika pesan adalah command existing
+    // Skip messages with multiple emojis (bot pattern)
+    const emojiCount = (pesan.match(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu) || []).length;
+    if (emojiCount > 3) {
+        logger.info(`🚫 Skip emoji-heavy message (${emojiCount} emojis): ${pesan.substring(0, 50)}...`);
+        return false;
+    }
+    
+    // Skip error messages
+    if (pesan.includes('❌ groq error') || pesan.includes('daily limit tercapai')) {
+        logger.info(`🚫 Skip error message: ${pesan.substring(0, 50)}...`);
+        return false;
+    }
+    
+    // Skip commands
     const existingCommands = [
         'catat ', 'reminder ', 'ingatkan ', 'test reminder ',
         'hari ini', 'minggu ini', 'bantuan', 'help', 'status',
@@ -346,26 +386,20 @@ function shouldUseAI(message, nomorPengirim) {
         }
     }
     
-    // Skip jika pesan kosong atau hanya whitespace
-    if (pesan.length === 0) {
-        logger.info(`🚫 Skip empty message`);
+    // Skip very short or empty messages
+    if (pesan.length === 0 || pesan.length < 2) {
+        logger.info(`🚫 Skip empty/short message`);
         return false;
     }
     
-    // Skip jika pesan hanya emoji atau karakter khusus (tanpa huruf/angka)
+    // Skip emoji-only messages
     if (!/[a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\u0100-\u017F\u0180-\u024F\u1E00-\u1EFF]/.test(pesan)) {
         logger.info(`🚫 Skip special chars only: ${pesan}`);
         return false;
     }
     
-    // Skip single digit atau accident
-    if (pesan.length === 1 && /^[0-9\.\?\!]$/.test(pesan)) {
-        logger.info(`🚫 Skip single char: ${pesan}`);
-        return false;
-    }
-    
-    // Skip common accident patterns
-    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm'];
+    // Skip common patterns
+    const skipPatterns = ['..', '???', '!!!', 'hm', 'hmm', 'ok', 'oke', 'ya', 'iya'];
     if (skipPatterns.includes(pesan)) {
         logger.info(`🚫 Skip pattern: ${pesan}`);
         return false;
