@@ -11,7 +11,7 @@ console.log('🚀 Memulai Chatbot WhatsApp dengan ChatGPT...');
 // KONFIGURASI CHATGPT
 const CHATGPT_CONFIG = {
     enabled: true,
-    apiKey: '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', // Ganti dengan OpenAI API key
+    apiKey: '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', // Ganti dengan OpenAI API key
     model: 'gpt-3.5-turbo', // Free model yang powerful
     // Alternative models:
     // model: 'gpt-4o-mini', // Super murah, very good
