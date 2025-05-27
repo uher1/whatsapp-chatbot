@@ -11,7 +11,7 @@ console.log('🚀 Memulai Chatbot WhatsApp dengan Groq AI (100% FREE)...');
 // KONFIGURASI GROQ AI - 100% GRATIS SELAMANYA
 const GROQ_CONFIG = {
     enabled: true,
-    apiKey: 'gsk_your-groq-api-key-here', // Get from console.groq.com - FREE!
+    apiKey: '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', // Get from console.groq.com - FREE!
     model: 'llama-3.1-70b-versatile', // Model terpintar yang gratis
     // Alternative free models:
     // model: 'llama-3.1-8b-instant', // Paling cepat
@@ -575,7 +575,7 @@ client.on('message_create', async (message) => {
 📝 **STEP 2: Update Config**
 Edit app.js:
 \`\`\`javascript
-apiKey: 'gsk-your-actual-groq-api-key',
+apiKey: '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',
 \`\`\`
 
 📝 **STEP 3: Install Package**
